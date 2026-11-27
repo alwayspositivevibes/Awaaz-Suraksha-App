@@ -31,7 +31,7 @@ jobs:
         run: flutter pub get
 
       - name: Ensure official Flutter Gradle setup
-        run: cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml && flutter create --platforms=android --org com.awaaz . && cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+        run: cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml && rm -rf android && flutter create --platforms=android --org com.awaaz . && cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
       - name: Build debug APK (sideloadable, no signing needed)
         run: flutter build apk --debug --target-platform android-arm64
@@ -40,4 +40,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: awaaz-sos-debug-apk
-          path: build/app/outputs/flutter-apk/*.apk         
+          path: build/app/outputs/flutter-apk/*.apk
