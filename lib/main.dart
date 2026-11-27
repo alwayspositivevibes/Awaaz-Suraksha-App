@@ -24,11 +24,14 @@ void startCallback() => FlutterForegroundTask.setTaskHandler(_BgHandler());
 class _BgHandler extends TaskHandler {
   SpeechToText _st = SpeechToText();
   bool _ready = false;
+  bool _destroyed = false;
+  Timer? _restartTimer;
   String _wakeWord = 'help me now';
   String _locale = 'en_IN';
 
   @override
   Future<void> onStart(DateTime ts, TaskStarter s) async {
+    _destroyed = false;
     final p = await SharedPreferences.getInstance();
     _wakeWord = (p.getString('wake_word') ?? 'help me now').toLowerCase();
     _locale = p.getString('locale_id') ?? 'en_IN';
@@ -48,15 +51,21 @@ class _BgHandler extends TaskHandler {
         if (_matchWake(t)) FlutterForegroundTask.sendDataToMain({'command': 'wake'});
         if (_matchSafe(t)) FlutterForegroundTask.sendDataToMain({'command': 'safe'});
       },
-      listenFor: const Duration(seconds: 60),
-      pauseFor: const Duration(seconds: 2),
+      listenFor: const Duration(minutes: 5),
+      pauseFor: const Duration(minutes: 5),
       localeId: _locale,
       cancelOnError: false,
       partialResults: true,
     );
   }
 
-  void _restart() => Future.delayed(const Duration(milliseconds: 400), _listen);
+  void _restart() {
+    if (!_ready || _destroyed || _restartTimer?.isActive == true) return;
+    _restartTimer = Timer(const Duration(milliseconds: 400), () {
+      _restartTimer = null;
+      if (!_destroyed) _listen();
+    });
+  }
 
   bool _matchWake(String t) {
     if (t.contains(_wakeWord)) return true;
@@ -67,7 +76,13 @@ class _BgHandler extends TaskHandler {
       RegExp(r"(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos|safe\s+now|im\s+safe)").hasMatch(t);
 
   @override Future<void> onRepeatEvent(DateTime ts) async {}
-  @override Future<void> onDestroy(DateTime ts) async { await _st.cancel(); }
+  @override
+  Future<void> onDestroy(DateTime ts) async {
+    _destroyed = true;
+    _ready = false;
+    _restartTimer?.cancel();
+    await _st.cancel();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -417,6 +432,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _initFg();
     await _requestPerms();
     if (_settings.voiceEnabled) await _startVoice();
+    else await _stopBgService();
     if (_settings.shakeEnabled) _startShake();
     if (mounted) setState(() { _loading = false; });
   }
@@ -446,8 +462,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       iosNotificationOptions: const IOSNotificationOptions(showNotification: true, playSound: false),
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(10000),
-        autoRunOnBoot: true,
-        autoRunOnMyPackageReplaced: true,
+        autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: false,
         allowWakeLock: true,
         allowWifiLock: true,
       ),
@@ -1805,8 +1821,8 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
           _deactivate('Voice: "I\'m safe"');
         }
       },
-      listenFor: const Duration(seconds: 60),
-      pauseFor: const Duration(seconds: 2),
+      listenFor: const Duration(minutes: 5),
+      pauseFor: const Duration(minutes: 5),
       localeId: 'en_IN',
       cancelOnError: false,
       partialResults: true,
