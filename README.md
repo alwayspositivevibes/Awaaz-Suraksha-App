@@ -185,7 +185,7 @@ flutter test
 flutter build apk --debug --flavor standard --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=false
 # Standard APK: build/app/outputs/flutter-apk/app-standard-debug.apk
 flutter build apk --debug --flavor autoSms --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=true
-# Auto-SMS APK: build/app/outputs/flutter-apk/app-autoSms-debug.apk
+# Auto-SMS APK: build/app/outputs/flutter-apk/app-autosms-debug.apk
 ```
 
 The workflow artifacts are for testing. Attach the chosen, privately signed APK variant to **GitHub Releases** for public downloads; keep release signing keys out of Git and Actions logs.

@@ -130,14 +130,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: awaaz-suraksha-auto-sms-debug-apk
-          path: build/app/outputs/flutter-apk/app-autoSms-debug.apk
+          path: build/app/outputs/flutter-apk/app-autosms-debug.apk
 
       - name: Verify APKs and SMS permissions
         run: |
           set -euo pipefail
-          set -x
           STANDARD_APK=build/app/outputs/flutter-apk/app-standard-debug.apk
-          AUTO_SMS_APK=build/app/outputs/flutter-apk/app-autoSms-debug.apk
+          AUTO_SMS_APK=build/app/outputs/flutter-apk/app-autosms-debug.apk
           test -s "$STANDARD_APK"
           test -s "$AUTO_SMS_APK"
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
