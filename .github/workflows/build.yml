@@ -1,4 +1,4 @@
-name: Build AWAAZ Suraksha APK
+name: Build AWAAZ SOS APK
 
 on:
   push:
@@ -7,16 +7,21 @@ on:
 
 jobs:
   build:
+    name: Build Release APK
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.27.1'
           channel: 'stable'
@@ -25,11 +30,14 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build Debug APK
+      - name: Ensure official Flutter Gradle setup
+        run: cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml && flutter create --platforms=android --org com.awaaz . && cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+      - name: Build debug APK (sideloadable, no signing needed)
         run: flutter build apk --debug --target-platform android-arm64
 
-      - name: Upload APK artifact
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: awaaz-sos-debug-apk
-          path: build/app/outputs/flutter-apk/*.apk          
+          path: build/app/outputs/flutter-apk/*.apk         
