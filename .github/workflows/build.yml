@@ -120,6 +120,18 @@ jobs:
       - name: Build optional automatic-SMS APK
         run: flutter build apk --debug --flavor autoSms --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=true
 
+      - name: Upload standard APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awaaz-suraksha-standard-debug-apk
+          path: build/app/outputs/flutter-apk/app-standard-debug.apk
+
+      - name: Upload automatic-SMS APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awaaz-suraksha-auto-sms-debug-apk
+          path: build/app/outputs/flutter-apk/app-autoSms-debug.apk
+
       - name: Verify APKs and SMS permissions
         run: |
           set -euo pipefail
@@ -133,29 +145,17 @@ jobs:
           test -x "$AAPT"
           "$AAPT" dump permissions "$STANDARD_APK" > /tmp/standard-permissions.txt
           "$AAPT" dump permissions "$AUTO_SMS_APK" > /tmp/auto-sms-permissions.txt
-          echo 'Permissions in standard APK:'
-          cat /tmp/standard-permissions.txt
-          echo 'Permissions in Auto-SMS APK:'
-          cat /tmp/auto-sms-permissions.txt
-          if grep -Eq 'android\.permission\.(SEND_SMS|ACCESS_BACKGROUND_LOCATION|REQUEST_INSTALL_PACKAGES|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECEIVE_BOOT_COMPLETED)' /tmp/standard-permissions.txt; then
-            echo 'The standard APK unexpectedly declares an optional or unused permission.'
-            exit 1
-          fi
+          for permission in SEND_SMS ACCESS_BACKGROUND_LOCATION REQUEST_INSTALL_PACKAGES READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE RECEIVE_BOOT_COMPLETED; do
+            if grep -Fq "android.permission.$permission" /tmp/standard-permissions.txt; then
+              echo "The standard APK unexpectedly declares android.permission.$permission."
+              exit 1
+            fi
+          done
           grep -q 'android.permission.SEND_SMS' /tmp/auto-sms-permissions.txt
           grep -q 'android.permission.ACCESS_BACKGROUND_LOCATION' /tmp/auto-sms-permissions.txt
-          if grep -Eq 'android\.permission\.(REQUEST_INSTALL_PACKAGES|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECEIVE_BOOT_COMPLETED)' /tmp/auto-sms-permissions.txt; then
-            echo 'The Auto-SMS APK unexpectedly declares an unused permission.'
-            exit 1
-          fi
-
-      - name: Upload standard APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: awaaz-suraksha-standard-debug-apk
-          path: build/app/outputs/flutter-apk/app-standard-debug.apk
-
-      - name: Upload automatic-SMS APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: awaaz-suraksha-auto-sms-debug-apk
-          path: build/app/outputs/flutter-apk/app-autoSms-debug.apk
+          for permission in REQUEST_INSTALL_PACKAGES READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE RECEIVE_BOOT_COMPLETED; do
+            if grep -Fq "android.permission.$permission" /tmp/auto-sms-permissions.txt; then
+              echo "The Auto-SMS APK unexpectedly declares android.permission.$permission."
+              exit 1
+            fi
+          done
