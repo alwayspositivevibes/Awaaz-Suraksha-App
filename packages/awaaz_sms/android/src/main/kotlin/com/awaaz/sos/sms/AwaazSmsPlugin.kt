@@ -12,6 +12,8 @@ import io.flutter.plugin.common.MethodChannel
 class AwaazSmsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private lateinit var context: Context
     private lateinit var channel: MethodChannel
+    private val indiaPhoneNumber = Regex("^\\+91[6-9][0-9]{9}$")
+    private val maxMessageLength = 500
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -34,10 +36,14 @@ class AwaazSmsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             return
         }
 
-        val phoneNumber = call.argument<String>("phoneNumber")
+        val phoneNumber = call.argument<String>("phoneNumber")?.trim()
         val message = call.argument<String>("message")
-        if (phoneNumber.isNullOrBlank() || message.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "A phone number and message are required.", null)
+        if (phoneNumber == null || !indiaPhoneNumber.matches(phoneNumber)) {
+            result.error("INVALID_PHONE", "Only validated +91 mobile destinations are supported.", null)
+            return
+        }
+        if (message.isNullOrBlank() || message.length > maxMessageLength) {
+            result.error("INVALID_MESSAGE", "Message must contain 1 to $maxMessageLength characters.", null)
             return
         }
 

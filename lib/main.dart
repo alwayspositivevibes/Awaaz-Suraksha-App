@@ -235,11 +235,52 @@ class Contact {
   final String name;
   final String phone;
   Contact({required this.name, required this.phone});
+
   factory Contact.fromSerialized(String s) {
-    final p = s.split('|||');
-    return Contact(name: p[0], phone: p.length > 1 ? p[1] : '');
+    final contact = tryParse(s);
+    if (contact == null) throw const FormatException('Invalid saved contact.');
+    return contact;
   }
-  String serialize() => '$name|||$phone';
+
+  static Contact? tryParse(String serialized) {
+    String? name;
+    String? phone;
+    if (serialized.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(serialized);
+        if (decoded is! Map<String, dynamic>) return null;
+        name = decoded['name'] is String ? decoded['name'] as String : null;
+        phone = decoded['phone'] is String ? decoded['phone'] as String : null;
+      } on FormatException {
+        final legacyParts = serialized.split('|||');
+        if (legacyParts.length != 2) return null;
+        name = legacyParts[0];
+        phone = legacyParts[1];
+      }
+    } else {
+      final legacyParts = serialized.split('|||');
+      if (legacyParts.length != 2) return null;
+      name = legacyParts[0];
+      phone = legacyParts[1];
+    }
+
+    final normalizedName = validateName(name ?? '');
+    final normalizedPhone = StorageService.validatePhone(phone ?? '');
+    if (normalizedName == null || normalizedPhone == null) return null;
+    return Contact(name: normalizedName, phone: normalizedPhone);
+  }
+
+  static String? validateName(String input) {
+    final name = input.trim();
+    if (name.isEmpty ||
+        name.length > 30 ||
+        RegExp(r'[\x00-\x1F\x7F]').hasMatch(name)) {
+      return null;
+    }
+    return name;
+  }
+
+  String serialize() => jsonEncode({'name': name, 'phone': phone});
 }
 
 class AppSettings {
@@ -253,6 +294,7 @@ class AppSettings {
   bool demoMode;
   bool smsAlertsEnabled;
   bool evidenceEnabled;
+  bool contactTestAlertsEnabled;
   double shakeSensitivity;
   int checkinMinutes;
   int liveShareMinutes;
@@ -269,6 +311,7 @@ class AppSettings {
     this.demoMode = false,
     this.smsAlertsEnabled = false,
     this.evidenceEnabled = false,
+    this.contactTestAlertsEnabled = false,
     this.shakeSensitivity = 20.0,
     this.checkinMinutes = 30,
     this.liveShareMinutes = 30,
@@ -288,6 +331,7 @@ class AppSettings {
       demoMode: p.getBool('demo_mode') ?? false,
       smsAlertsEnabled: p.getBool('sms_alerts_enabled') ?? false,
       evidenceEnabled: p.getBool('evidence_enabled') ?? false,
+      contactTestAlertsEnabled: p.getBool('contact_test_alerts_enabled') ?? false,
       shakeSensitivity: p.getDouble('shake_sensitivity') ?? 20.0,
       checkinMinutes: p.getInt('checkin_minutes') ?? 30,
       liveShareMinutes: p.getInt('live_share_minutes') ?? 30,
@@ -307,6 +351,7 @@ class AppSettings {
     await p.setBool('demo_mode', demoMode);
     await p.setBool('sms_alerts_enabled', smsAlertsEnabled);
     await p.setBool('evidence_enabled', evidenceEnabled);
+    await p.setBool('contact_test_alerts_enabled', contactTestAlertsEnabled);
     await p.setDouble('shake_sensitivity', shakeSensitivity);
     await p.setInt('checkin_minutes', checkinMinutes);
     await p.setInt('live_share_minutes', liveShareMinutes);
@@ -317,7 +362,8 @@ class AppSettings {
     wakeWord: wakeWord, localeId: localeId, languageLabel: languageLabel,
     voiceEnabled: voiceEnabled, sirenEnabled: sirenEnabled, silentMode: silentMode,
     shakeEnabled: shakeEnabled, demoMode: demoMode, smsAlertsEnabled: smsAlertsEnabled,
-    evidenceEnabled: evidenceEnabled, shakeSensitivity: shakeSensitivity,
+    evidenceEnabled: evidenceEnabled, contactTestAlertsEnabled: contactTestAlertsEnabled,
+    shakeSensitivity: shakeSensitivity,
     checkinMinutes: checkinMinutes, liveShareMinutes: liveShareMinutes,
     liveShareIntervalMinutes: liveShareIntervalMinutes,
   );
@@ -445,9 +491,10 @@ class SirenService {
     _active = true;
     try {
       await _channel.invokeMethod('start');
-    } catch (_) {
-      _active = false;
-      return;
+    } on MissingPluginException catch (error) {
+      await StorageService.addLog('Siren audio unavailable; haptics remain active: $error');
+    } on PlatformException catch (error) {
+      await StorageService.addLog('Siren audio failed; haptics remain active: ${error.message ?? error.code}');
     }
 
     // Haptic storm: heavy triple-pulse every 500ms
@@ -468,7 +515,17 @@ class SirenService {
     if (!_active) return;
     _active = false;
     _hapticTimer?.cancel();
-    _channel.invokeMethod('stop');
+    unawaited(_stopAudio());
+  }
+
+  Future<void> _stopAudio() async {
+    try {
+      await _channel.invokeMethod('stop');
+    } on MissingPluginException catch (error) {
+      await StorageService.addLog('Siren stop unavailable: $error');
+    } on PlatformException catch (error) {
+      await StorageService.addLog('Siren stop failed: ${error.message ?? error.code}');
+    }
   }
 
   bool get isActive => _active;
@@ -483,15 +540,37 @@ class StorageService {
 
   static Future<List<Contact>> loadContacts() async {
     final p = await SharedPreferences.getInstance();
-    return (p.getStringList(_cKey) ?? [])
-        .map(Contact.fromSerialized)
-        .where((c) => c.phone.isNotEmpty)
-        .toList();
+    final saved = p.getStringList(_cKey) ?? [];
+    final contacts = <Contact>[];
+    var needsMigration = false;
+    for (final serialized in saved) {
+      final contact = Contact.tryParse(serialized);
+      if (contact == null) {
+        needsMigration = true;
+        await addLog('Ignored an invalid saved trusted contact');
+        continue;
+      }
+      contacts.add(contact);
+      if (serialized != contact.serialize()) needsMigration = true;
+    }
+    if (needsMigration) {
+      await p.setStringList(_cKey, contacts.map((c) => c.serialize()).toList());
+    }
+    return contacts;
   }
 
   static Future<void> saveContacts(List<Contact> cs) async {
     final p = await SharedPreferences.getInstance();
-    await p.setStringList(_cKey, cs.map((c) => c.serialize()).toList());
+    final normalized = <Contact>[];
+    for (final contact in cs) {
+      final name = Contact.validateName(contact.name);
+      final phone = validatePhone(contact.phone);
+      if (name == null || phone == null) {
+        throw const FormatException('A trusted contact has invalid details.');
+      }
+      normalized.add(Contact(name: name, phone: phone));
+    }
+    await p.setStringList(_cKey, normalized.map((c) => c.serialize()).toList());
   }
 
   static String? validatePhone(String input) {
@@ -550,11 +629,28 @@ class TtsService {
   void setMuted(bool v) => _muted = v;
   Future<void> speak(String s, {VoidCallback? onDone}) async {
     if (_muted) { onDone?.call(); return; }
-    await _t.stop();
-    _t.setCompletionHandler(() => onDone?.call());
-    await _t.speak(s);
+    try {
+      await _t.stop();
+      _t.setCompletionHandler(() => onDone?.call());
+      await _t.speak(s);
+    } on MissingPluginException catch (error) {
+      await StorageService.addLog('Voice guidance unavailable: $error');
+      onDone?.call();
+    } on PlatformException catch (error) {
+      await StorageService.addLog('Voice guidance failed: ${error.message ?? error.code}');
+      onDone?.call();
+    }
   }
-  Future<void> stop() => _t.stop();
+
+  Future<void> stop() async {
+    try {
+      await _t.stop();
+    } on MissingPluginException catch (error) {
+      await StorageService.addLog('Voice stop unavailable: $error');
+    } on PlatformException catch (error) {
+      await StorageService.addLog('Voice stop failed: ${error.message ?? error.code}');
+    }
+  }
 }
 
 class LocationService {
@@ -737,8 +833,13 @@ class AlertService {
     return 'SOS from Awaaz Suraksha. I need help. Location unavailable. Call me now or dial 112. $time';
   }
 
+  static String buildTestMsg() =>
+      'TEST ONLY — Awaaz Suraksha contact check. This is not an emergency. Reply if you received this message.';
+
   static Future<bool> whatsapp(Contact c, String msg) async {
-    final d = c.phone.replaceAll(RegExp(r'\D'), '');
+    final phone = StorageService.validatePhone(c.phone);
+    if (phone == null) return false;
+    final d = phone.replaceAll(RegExp(r'\D'), '');
     final text = Uri.encodeComponent(msg);
     final direct = Uri.parse('whatsapp://send?phone=$d&text=$text');
     final web = Uri.parse('https://wa.me/$d?text=$text');
@@ -758,9 +859,16 @@ class AlertService {
   ) async {
     final sent = <String>[];
     for (final contact in contacts) {
+      final phone = StorageService.validatePhone(contact.phone);
+      if (phone == null) {
+        await StorageService.addLog(
+          'SMS skipped for ${contact.name}: invalid trusted-contact number',
+        );
+        continue;
+      }
       try {
-        await AwaazSms.send(phoneNumber: contact.phone, message: message);
-        sent.add(contact.phone);
+        await AwaazSms.send(phoneNumber: phone, message: message);
+        sent.add(phone);
       } on PlatformException catch (error) {
         await StorageService.addLog(
           'SMS failed for ${contact.name}: ${error.message ?? error.code}',
@@ -785,7 +893,9 @@ class AlertService {
   }
 
   static Future<void> call(Contact c) async {
-    try { await launchUrl(Uri.parse('tel:${c.phone}')); } catch (_) {}
+    final phone = StorageService.validatePhone(c.phone);
+    if (phone == null) return;
+    try { await launchUrl(Uri.parse('tel:$phone')); } catch (_) {}
   }
 }
 
@@ -1668,6 +1778,7 @@ class _ToolsTabState extends State<_ToolsTab> {
   int _checkinDeadlineMs = 0;
   int _liveShareUntilMs = 0;
   String _liveShareStatus = '';
+  String _contactTestStatus = '';
   String _caller = 'Maa';
   int _delay = 0;
   final _callerOpts = ['Maa', 'Dad', 'Didi', 'Bhai', 'Friend', '112 Control Room'];
@@ -1907,6 +2018,74 @@ class _ToolsTabState extends State<_ToolsTab> {
     await StorageService.addLog('Live location sharing stopped');
   }
 
+  Future<void> _sendContactTest() async {
+    if (!widget.settings.contactTestAlertsEnabled) return;
+    if (widget.settings.demoMode) {
+      setState(() => _contactTestStatus = 'Turn off Demo Mode before sending a real test message');
+      return;
+    }
+    if (widget.contacts.isEmpty) {
+      setState(() => _contactTestStatus = 'Add a trusted contact first');
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _kCard,
+        title: const Text('Send contact test?', style: TextStyle(color: _kText)),
+        content: Text(
+          'A clearly marked TEST message will go to: ${widget.contacts.map((c) => c.name).join(', ')}. It contains no location and does not trigger SOS.${widget.settings.smsAlertsEnabled ? ' SMS/carrier charges may apply.' : ' WhatsApp will open drafts for you to send.'}',
+          style: const TextStyle(color: _kMuted),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Send test')),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    var smsSent = <String>[];
+    if (widget.settings.smsAlertsEnabled) {
+      final permission = await Permission.sms.request();
+      if (!mounted) return;
+      if (permission.isGranted) {
+        smsSent = await AlertService.sendSmsToContacts(
+          widget.contacts,
+          AlertService.buildTestMsg(),
+        );
+      }
+    }
+
+    var whatsappDrafts = 0;
+    for (final contact in widget.contacts) {
+      if (smsSent.contains(contact.phone)) continue;
+      if (await AlertService.whatsapp(contact, AlertService.buildTestMsg())) {
+        whatsappDrafts++;
+      }
+      await Future.delayed(const Duration(milliseconds: 400));
+    }
+
+    final smsStatus = smsSent.isEmpty
+        ? ''
+        : 'SMS queued for ${smsSent.length}/${widget.contacts.length}. Delivery is not verified.';
+    final whatsappStatus = whatsappDrafts == 0
+        ? ''
+        : 'WhatsApp drafts opened for $whatsappDrafts; tap Send in WhatsApp.';
+    if (mounted) {
+      setState(() {
+        _contactTestStatus = [smsStatus, whatsappStatus]
+            .where((status) => status.isNotEmpty)
+            .join(' ');
+        if (_contactTestStatus.isEmpty) {
+          _contactTestStatus = 'No test message could be opened or queued';
+        }
+      });
+    }
+    await StorageService.addLog('Manual contact-readiness test requested');
+  }
+
   String _fmt(Duration d) =>
       '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 
@@ -1951,6 +2130,39 @@ class _ToolsTabState extends State<_ToolsTab> {
           ]),
         ),
         const SizedBox(height: 20),
+
+        if (widget.settings.contactTestAlertsEnabled) ...[
+          _secTitle('👥 Contact Readiness'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _kCard,
+              border: Border.all(color: _kBorder),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                'Send a clearly labeled test message. This does not start SOS or include your location.',
+                style: TextStyle(fontSize: 13, color: _kMuted),
+              ),
+              if (_contactTestStatus.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(_contactTestStatus, style: const TextStyle(fontSize: 12, color: _kGreen)),
+              ],
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _sendContactTest,
+                  icon: const Icon(Icons.mark_email_read_outlined),
+                  label: const Text('SEND CONTACT TEST'),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 20),
+        ],
 
         _secTitle('📍 Live Location Share'),
         const SizedBox(height: 8),
@@ -2162,8 +2374,8 @@ class _ContactsTabState extends State<_ContactsTab> {
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: () {
               final phone = StorageService.validatePhone(pc.text.trim());
-              final name = nc.text.trim();
-              if (name.isEmpty || phone == null) { sm(() => err = 'Enter a valid name and 10-digit +91 number.'); return; }
+              final name = Contact.validateName(nc.text);
+              if (name == null || phone == null) { sm(() => err = 'Enter a valid name and 10-digit +91 number.'); return; }
               final updated = List<Contact>.from(_contacts);
               if (idx != null) { updated[idx] = Contact(name: name, phone: phone); }
               else {
@@ -2381,6 +2593,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               (v) async {
                 if (v) {
                   final permission = await Permission.sms.request();
+                  if (!mounted) return;
                   if (!permission.isGranted) {
                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('SMS permission is needed for automatic alerts.')),
@@ -2397,6 +2610,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'Opt in to record during SOS. Files are AES-GCM encrypted on this device.',
               _s.evidenceEnabled,
               (v) => setState(() => _s.evidenceEnabled = v),
+            ),
+            const Divider(color: _kBorder, height: 1),
+            _tog(
+              'Contact test alerts',
+              'Show a manual, confirmation-gated test message in Tools. Disabled by default.',
+              _s.contactTestAlertsEnabled,
+              (v) => setState(() => _s.contactTestAlertsEnabled = v),
             ),
           ]),
           const SizedBox(height: 16),

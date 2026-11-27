@@ -14,7 +14,7 @@
 
 > Built for the **Wispr Flow × Scaler AI Voice Hackathon** by **Team CTRL ALT ELITE**
 
-[📥 Download APK](#-download-apk) • [✨ Features](#-features) • [🔒 Security](#-security) • [📱 Triggers](#-sos-triggers)
+[📥 Download APK](#-download-apk) • [✨ Features](#-features) • [🔒 Security](#-security) • [📱 Triggers](#-multi-trigger-sos)
 
 </div>
 
@@ -22,9 +22,11 @@
 
 ## 📥 Download APK
 
-Download the latest APK from **[GitHub Releases](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/releases)**.
+Download the APK attached to the latest **[GitHub Release](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/releases)**. If no release has an APK attached yet, the maintainer has not published one.
 
-Install on Android: `Settings → Install unknown apps → Allow`
+The APK in **Actions** is a debug/testing artifact, not the recommended public release build. Before publishing, sign the APK with a private release key; never commit the keystore or its passwords to this repository.
+
+To install a downloaded APK on Android, allow installation for the browser or file manager that opened it. Only install APKs from a release you trust.
 
 ---
 
@@ -78,6 +80,12 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 - Alert message includes coordinates, timestamp, emergency numbers
 - Fallback: WhatsApp or direct call buttons if SMS is disabled or unavailable
 
+### ✅ Contact Readiness Test
+- Enable **Contact test alerts** in Settings to reveal the manual test action in Tools
+- The feature is off by default and always asks for confirmation before contacting saved people
+- Test messages are clearly labeled, contain no location, and do not start an SOS
+- Direct SMS is used only when automatic SMS is enabled; otherwise WhatsApp opens a draft for you to send
+
 ### 🎙️ Audio Evidence Vault
 - Recording is off by default; enable “Encrypted audio evidence” in Settings to opt in
 - Encrypts saved recordings with AES-GCM and stores the key in Android secure storage
@@ -115,7 +123,8 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 | Screenshot prevention | ✅ FLAG_SECURE via System |
 | Encrypted audio | ✅ AES-GCM; opt-in; device-held key |
 | Location sharing | ✅ SMS only to user-selected contacts; no server |
-| Input sanitization | ✅ Phone number validation |
+| SMS destinations | ✅ Validated in Dart and again in the Android bridge |
+| Contact storage | ⚠️ Local app storage; not encrypted at rest |
 | No analytics/tracking | ✅ Zero data collection |
 | Offline-first | ✅ Works with no internet |
 
@@ -126,13 +135,13 @@ Emergency and live-location SMS leave the phone through the cellular carrier whe
 ## 🏗️ Architecture
 
 ```
-lib/main.dart (single-file Flutter app)
-├── _SosBackgroundHandler     — Background shake detection via flutter_foreground_task
+lib/main.dart (Flutter app and service layer)
+├── _BgHandler                — Background shake, check-in, and live-share tasks
 ├── StorageService            — SharedPreferences (contacts, settings)
 ├── TtsService                — flutter_tts (en-IN, rate 0.52)
 ├── LocationService           — geolocator (high-acc + network fallback)
 ├── RecordingService          — record (AAC 128kbps)
-├── AwaazSms                  — minimal native SMS bridge usable from background task isolate
+├── AwaazSms                  — native bridge with a +91 destination allowlist
 ├── EvidenceStorage           — AES-GCM files + Android secure key storage
 ├── SosTileService            — Android Quick Settings SOS tile
 ├── SecurityService           — Root detection
@@ -165,9 +174,13 @@ lib/main.dart (single-file Flutter app)
 
 ```bash
 flutter pub get
+flutter analyze
+flutter test
 flutter build apk --debug --target-platform android-arm64
-# APK at: build/app/outputs/flutter-apk/app-debug.apk
+# APK in: build/app/outputs/flutter-apk/
 ```
+
+The workflow artifact is for testing. Attach a privately signed APK to **GitHub Releases** for public downloads; keep release signing keys out of Git and Actions logs.
 
 ---
 

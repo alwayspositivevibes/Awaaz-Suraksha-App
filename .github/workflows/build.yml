@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build Release APK
+    name: Analyze, test, and build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -30,9 +30,18 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+
       - name: Reconstruct Flutter Android scaffold
         run: |
+          set -euo pipefail
           # Save our custom files before flutter create wipes android/
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
+          test -f android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
           cp android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt /tmp/MainActivity.kt
           cp android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt /tmp/SosTileService.kt
@@ -46,8 +55,9 @@ jobs:
           done
 
           # Save assets
+          test -d assets
           mkdir -p /tmp/assets
-          if [ -d assets ]; then cp -r assets/. /tmp/assets/; fi
+          cp -r assets/. /tmp/assets/
 
           # Regenerate Android scaffold
           rm -rf android
@@ -60,6 +70,9 @@ jobs:
           mkdir -p android/app/src/main/kotlin/com/awaaz/sos
           cp /tmp/MainActivity.kt android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
           cp /tmp/SosTileService.kt android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
+          test -f android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
 
           # Restore icons
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
@@ -71,25 +84,36 @@ jobs:
 
           # Restore assets
           mkdir -p assets
-          cp -r /tmp/assets/. assets/ 2>/dev/null || true
+          cp -r /tmp/assets/. assets/
+          test -s assets/models/vosk-model-small-en-in-0.4.zip
+          test -s assets/siren.wav
 
           # Set SDK versions
-          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle || true
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle || true
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle || true
+          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle
+          grep -Eq 'minSdk(Version)?[[:space:]]*=[[:space:]]*24' android/app/build.gradle
+          grep -q 'compileSdk = 36' android/app/build.gradle
+          grep -q 'targetSdk = 34' android/app/build.gradle
           sed -i '/compileOptions {/a\        coreLibraryDesugaringEnabled true' android/app/build.gradle
           printf '\ndependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"\n}\n' >> android/app/build.gradle
-          sed -i 's/namespace = flutter[.]namespace/namespace = "com.awaaz.sos"/g' android/app/build.gradle || true
-          sed -i 's/namespace .*/namespace = "com.awaaz.sos"/g' android/app/build.gradle || true
-          sed -i 's/applicationId = "com.awaaz.awaaz_sos"/applicationId = "com.awaaz.sos"/g' android/app/build.gradle || true
+          sed -i 's/namespace = flutter[.]namespace/namespace = "com.awaaz.sos"/g' android/app/build.gradle
+          sed -i 's/namespace .*/namespace = "com.awaaz.sos"/g' android/app/build.gradle
+          sed -i 's/applicationId = "com.awaaz.awaaz_sos"/applicationId = "com.awaaz.sos"/g' android/app/build.gradle
+          grep -q 'namespace = "com.awaaz.sos"' android/app/build.gradle
+          grep -q 'applicationId = "com.awaaz.sos"' android/app/build.gradle
 
           # Set Kotlin version
-          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle || true
-          sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '2.1.0'/g" android/build.gradle || true
+          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle
+          sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '2.1.0'/g" android/build.gradle
+          grep -q 'org.jetbrains.kotlin.android" version "2.1.0"' android/settings.gradle
 
       - name: Build debug APK
         run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Verify APK output
+        run: find build/app/outputs/flutter-apk -maxdepth 1 -type f -name '*.apk' -size +0c -print -quit | grep -q .
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
