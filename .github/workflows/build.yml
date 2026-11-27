@@ -1,4 +1,4 @@
-name: Build AWAAZ SOS APK
+name: Build Awaaz Suraksha APK
 
 on:
   push:
@@ -30,24 +30,57 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Ensure official Flutter Gradle setup
+      - name: Reconstruct Flutter Android scaffold
         run: |
-          mkdir -p assets
+          # Save our custom files before flutter create wipes android/
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
+
+          # Save icons
+          mkdir -p /tmp/icons
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            if [ -f "android/app/src/main/res/mipmap-${density}/ic_launcher.png" ]; then
+              cp "android/app/src/main/res/mipmap-${density}/ic_launcher.png" "/tmp/icons/ic_launcher_${density}.png"
+            fi
+          done
+
+          # Save assets
+          mkdir -p /tmp/assets
+          if [ -d assets ]; then cp -r assets/. /tmp/assets/; fi
+
+          # Regenerate Android scaffold
           rm -rf android
           flutter create --platforms=android --org com.awaaz .
+
+          # Restore our AndroidManifest
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+          # Restore icons
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            if [ -f "/tmp/icons/ic_launcher_${density}.png" ]; then
+              mkdir -p "android/app/src/main/res/mipmap-${density}"
+              cp "/tmp/icons/ic_launcher_${density}.png" "android/app/src/main/res/mipmap-${density}/ic_launcher.png"
+            fi
+          done
+
+          # Restore assets
+          mkdir -p assets
+          cp -r /tmp/assets/. assets/ 2>/dev/null || true
+
+          # Set SDK versions
           sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle || true
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle || true
+
+          # Set Kotlin version
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle || true
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '2.1.0'/g" android/build.gradle || true
 
-      - name: Build debug APK (sideloadable, no signing needed)
+      - name: Build debug APK
         run: flutter build apk --debug --target-platform android-arm64
 
-      - name: Upload APK as artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: awaaz-sos-debug-apk
+          name: awaaz-suraksha-debug-apk
           path: build/app/outputs/flutter-apk/*.apk
