@@ -43,9 +43,6 @@ dependencies:
   # Path for saving audio files
   path_provider: ^2.1.4
 
-  # Audio playback for siren and sound effects
-  audioplayers: ^6.0.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -53,6 +50,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/siren.wav
-    - assets/app_logo.png
