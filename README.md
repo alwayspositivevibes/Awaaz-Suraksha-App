@@ -1,139 +1,157 @@
-# 🛡️ AWAAZ Suraksha (आवाज़ सुरक्षा)
-### Voice-First Native Emergency SOS System for Women Safety in India
+<div align="center">
 
-[![Built for](https://img.shields.io/badge/Hackathon-Wispr_Flow_x_Scaler_AI_Voice-ff4b4b?style=for-the-badge)](https://scaler.com)
-[![Platform](https://img.shields.io/badge/Platform-Android_Native_(Flutter)-02569B?style=for-the-badge&logo=flutter&logoColor=white)](https://flutter.dev)
-[![Architecture](https://img.shields.io/badge/Architecture-Zero--Cloud_/_Zero--API_Keys-10B981?style=for-the-badge)](#zero-backend-guarantee)
-[![Build Status](https://img.shields.io/badge/Build-GitHub_Actions_CI-success?style=for-the-badge&logo=githubactions&logoColor=white)](#automated-apk-builds)
+<img src="assets/app_logo.png" width="120" alt="Awaaz Suraksha Logo"/>
+
+# 🛡️ Awaaz Suraksha — आवाज़ सुरक्षा
+
+**Voice-First Emergency Safety App for Women in India**
+
+[![Build Status](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/actions/workflows/build.yml/badge.svg)](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/actions)
+![Flutter](https://img.shields.io/badge/Flutter-3.27.1-blue?logo=flutter)
+![Android](https://img.shields.io/badge/Android-API%2024+-green?logo=android)
+![Made in India](https://img.shields.io/badge/Made%20with%20%E2%9D%A4%EF%B8%8F-India-orange)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+> Built for the **Wispr Flow × Scaler AI Voice Hackathon** by **Team CTRL ALT ELITE**
+
+[📥 Download APK](#-download-apk) • [✨ Features](#-features) • [🔒 Security](#-security) • [📱 Triggers](#-sos-triggers)
+
+</div>
 
 ---
 
-## 📌 Problem Statement & Innovation
-In high-stress emergency situations, victims cannot unlock their phones, browse contacts, or type messages. Most existing SOS tools fail because:
-1. **Physical Interaction Dependency:** Require unlocking device & navigating UI.
-2. **Cloud/Server Latency:** Rely on paid cloud APIs (Twilio/AWS) which fail without stable internet or active credits.
-3. **Background Limitations:** Web browsers block microphone & GPS when minimized or screen-locked.
+## 📥 Download APK
 
-**AWAAZ Suraksha solves this at the native hardware level:**
-A zero-cloud, 100% on-device Android safety system that listens continuously in the background using Android **Foreground Services**, triggering multi-channel emergency dispatches, high-accuracy GPS coordinates, and covert audio evidence recording via simple voice commands.
+Go to **[Actions](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/actions)** → Latest successful `Build Awaaz Suraksha APK` → Download `awaaz-suraksha-debug-apk`
+
+Install on Android: `Settings → Install unknown apps → Allow`
 
 ---
 
-## ⚡ How It Works (The Emergency Pipeline)
+## 🎯 Problem We Solve
+
+Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual taps — useless in a real emergency. **Awaaz Suraksha** activates with just your voice or a shake, even when your phone is in your pocket.
+
+---
+
+## ✨ Features
+
+### 🗣️ Always-On Voice Detection
+- Says **"Help me now"** or **"Bachao"** — triggers SOS instantly
+- Works in background via persistent foreground service
+- Multilingual: English (en-IN) + Hinglish + Hindi words
+- Voice cancel: Say **"I'm safe"** to deactivate
+
+### 🚨 Multi-Trigger SOS
+| Trigger | How |
+|---------|-----|
+| 🗣️ Voice | Say "Help me now" / "Bachao" |
+| 👆 Tap | Tap the big red SOS button |
+| 📳 Shake | Shake phone 3× within 1.5 seconds |
+| 🤫 Silent | Hold the shield logo 3 seconds (zero sound) |
+
+### 📍 GPS + WhatsApp Alert
+- Captures GPS in 5–8s (high accuracy first, falls back to network)
+- Sends Google Maps link to ALL trusted contacts via WhatsApp
+- Alert message includes coordinates, timestamp, emergency numbers
+- Fallback: direct call buttons if WhatsApp fails
+
+### 🎙️ Audio Evidence Vault
+- Auto-starts recording on SOS dispatch
+- Saves as timestamped `.m4a` to private app storage
+- 128kbps AAC — clear voice quality
+- Shows live recording duration on SOS screen
+
+### 👥 Trusted Contacts (up to 5)
+- Indian phone validation (+91, 10-digit)
+- Priority ordering (1 → 5)
+- Edit/delete with one tap
+
+### 📞 Fake Call Screen
+- Pretend you're on a call to escape situations
+- Choose caller: Maa / Dad / Didi / Bhai / 112 Control Room
+- 0s / 5s / 10s / 30s delay
+- Live call timer display
+
+### 🏥 Emergency Helplines
+- One-tap dial: **112** (Emergency) · **181** (Women) · **100** (Police) · **108** (Ambulance)
+
+### 🔇 Silent SOS Mode
+- Zero audio output — camera-off stealth mode
+- Heavy vibration siren (triple haptic pulses)
+- No TTS announcements
+
+---
+
+## 🔒 Security
+
+| Feature | Status |
+|---------|--------|
+| Root detection | ✅ Warns user |
+| Screenshot prevention | ✅ FLAG_SECURE via System |
+| Local-only storage | ✅ No cloud, no servers |
+| Input sanitization | ✅ Phone number validation |
+| No analytics/tracking | ✅ Zero data collection |
+| Offline-first | ✅ Works with no internet |
+
+---
+
+## 🏗️ Architecture
 
 ```
-[ 🎙️ Background Voice Guard (Foreground Service) ]
-                  │
-                  ▼  Hears: "Help me now" / "Bachao" / "SOS Help"
-[ ⏱️ 5-Second Fail-Safe Countdown (Bilingual Voice Alert) ]
-       │                                     │
-       ├─ If Safe: "I'm safe" ──► CANCELLED   │ (No cancel within 5s)
-       │                                     ▼
-[ 🚨 ACTIVE SOS STATE ENGAGED ]
-  ├── 📍 GPS Capture (High-accuracy satellite + network fallback)
-  ├── 💬 WhatsApp Multi-Dispatch (Pre-filled live maps link to trusted contacts)
-  ├── 🎙️ Local Audio Evidence Recording (.m4a secure local storage)
-  └── 📞 Quick Access to Indian Emergency Helplines (112, 181, 100, 108)
+lib/main.dart (single-file Flutter app)
+├── _SosBackgroundHandler     — Background mic via flutter_foreground_task
+├── StorageService            — SharedPreferences (contacts, settings)
+├── TtsService                — flutter_tts (en-IN, rate 0.52)
+├── LocationService           — geolocator (high-acc + network fallback)
+├── RecordingService          — record (AAC 128kbps)
+├── WhatsAppService           — url_launcher (wa.me deep link)
+├── SecurityService           — Root detection
+├── HomeScreen                — Main UI + shake/voice guard
+├── SosActiveScreen           — Active SOS countdown + dispatch
+└── FakeCallScreen            — Fake call UI
 ```
 
 ---
 
-## 🎯 Key Features
+## 📦 Stack
 
-<details open>
-<summary><b>1. 🎙️ Background Voice Detection (True On-Device Guard)</b></summary>
-<br>
-
-- Uses Android **Foreground Service** (`microphone|location` foreground service types).
-- Stays active when the app is minimized, swapped out, or screen-locked.
-- **Wake Phrases:**
-  - `"Help me now"`
-  - `"Bachao"` (Devanagari: `बचाओ` & Hinglish)
-  - `"SOS help"`
-  - `"Awaaz help me"` / phonetic variations
-- **Deactivation Phrase:** `"I'm safe"` / `"Cancel SOS"`
-</details>
-
-<details open>
-<summary><b>2. 📍 High-Accuracy Instant GPS Capture</b></summary>
-<br>
-
-- Queries dual-provider location (GPS Satellite + Network Triangulation).
-- Formats direct Google Maps navigation coordinates: `https://maps.google.com/?q=LAT,LNG`.
-- Included directly in the emergency alert payload.
-</details>
-
-<details open>
-<summary><b>3. 💬 Zero-Cost WhatsApp Emergency Dispatch</b></summary>
-<br>
-
-- Directly utilizes the native `wa.me` deep-linking URL scheme.
-- Zero SMS gateway fees, zero Twilio API keys, zero reliance on external third-party servers.
-- Broadcasts to all user-configured emergency contacts with one tap.
-</details>
-
-<details open>
-<summary><b>4. 📼 Covert Evidence Recording</b></summary>
-<br>
-
-- Activates on-device audio recording (`.m4a`) the second an SOS is confirmed.
-- Stored locally in app sandbox storage for evidentiary use.
-</details>
-
-<details open>
-<summary><b>5. 🚨 Indian Emergency Quick-Dial</b></summary>
-<br>
-
-- **112** — National Emergency All-In-One Number
-- **181** — National Women Helpline
-- **100** — Police Control Room
-- **108** — Disaster & Ambulance Services
-</details>
-
-<details open>
-<summary><b>6. 🎭 Discrete Features: Fake Call & Shake-to-SOS</b></summary>
-<br>
-
-- **Shake Detection:** Built-in 3-axis accelerometer sensor triggers countdown when shaken violently.
-- **Fake Call Generator:** Simulates a realistic incoming call screen with ringtone to excuse oneself from unsafe environments.
-</details>
+| Layer | Technology |
+|-------|-----------|
+| Framework | Flutter 3.27.1 |
+| Language | Dart 3.3+ |
+| Background | flutter_foreground_task 8.11 |
+| Voice | speech_to_text 6.6.2 |
+| TTS | flutter_tts 4.0.2 |
+| GPS | geolocator 13.0.2 |
+| Audio | record 6.0.0 |
+| Sensors | sensors_plus 5.0.1 |
+| Storage | shared_preferences 2.3.3 |
+| Permissions | permission_handler 11.3.1 |
+| Build | GitHub Actions + Flutter 3.27.1 + Java 17 |
 
 ---
 
-## 🛡️ Zero-Backend Architecture Guarantee
+## 🏃 Build Locally
 
-| Concern | How AWAAZ Suraksha Handles It |
-| :--- | :--- |
-| **Privacy** | Audio processing is 100% on-device via native speech engines. Nothing is recorded or uploaded to any cloud server. |
-| **Cost** | 0 cloud subscriptions, 0 database fees, 0 SMS fees. |
-| **Reliability** | Operates even in low network conditions; core alarms, recording, and location tracking require no cloud servers. |
-
----
-
-## 🛠️ Tech Stack & Native APIs
-
-- **Framework:** Flutter (Android SDK 36, compileSdk 36, minSdk 24)
-- **Speech Engine:** `speech_to_text` (Native Android SpeechRecognizer)
-- **Voice Feedback:** `flutter_tts` (Local Text-to-Speech Engine)
-- **Background Daemon:** `flutter_foreground_task` (Android Foreground Service with `WAKE_LOCK`)
-- **Sensor Telemetry:** `sensors_plus` (Hardware Accelerometer)
-- **Geolocation:** `geolocator` (FusedLocationProviderClient)
-- **Audio Capture:** `record` (AAC/M4A Local Audio Recorder)
-- **CI/CD:** Automated cloud APK builds via **GitHub Actions** (`ubuntu-latest`)
+```bash
+flutter pub get
+flutter build apk --debug --target-platform android-arm64
+# APK at: build/app/outputs/flutter-apk/app-debug.apk
+```
 
 ---
 
-## 📦 Automated APK Builds
+## 🏆 Hackathon
 
-Every commit to `main` builds a sideloadable Android ARM64 APK automatically:
+Built for the **Wispr Flow × Scaler AI Voice Hackathon**
 
-1. Go to the **Actions** tab in this repository.
-2. Select the latest workflow run.
-3. Download the **`awaaz-sos-debug-apk`** artifact.
-4. Extract the `.zip` and sideload the `.apk` on any Android device running Android 7.0 (Nougat) or newer.
+**Team CTRL ALT ELITE**
+
+> *Made with ❤️ in India*
 
 ---
 
-## 👩‍💻 Author
-**Wispr Flow × Scaler AI Voice Hackathon Submission**  
-Built by a 1st Semester Electronics & Communication Engineering student.
+<div align="center">
+<sub>Offline-ready · Local storage only · No tracking · No cloud · Open source</sub>
+</div>
