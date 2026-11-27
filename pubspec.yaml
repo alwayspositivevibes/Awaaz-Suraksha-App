@@ -1,0 +1,54 @@
+name: awaaz_sos
+description: AWAAZ Suraksha — Voice-first emergency safety app for women in India.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Voice Recognition
+  speech_to_text: ^6.6.2
+
+  # Text to Speech
+  flutter_tts: ^4.0.2
+
+  # GPS Location
+  geolocator: ^13.0.2
+
+  # Audio Recording
+  record: ^5.1.2
+
+  # Open WhatsApp / tel: links
+  url_launcher: ^6.3.1
+
+  # Trusted Contacts Storage
+  shared_preferences: ^2.3.3
+
+  # Runtime Permissions
+  permission_handler: ^11.3.1
+
+  # Keep Screen On
+  wakelock_plus: ^1.2.9
+
+  # Background Foreground Service (keeps mic alive when minimized)
+  flutter_foreground_task: ^8.11.0
+
+  # Accelerometer for Shake-to-SOS
+  sensors_plus: ^5.0.1
+
+  # Path for saving audio files
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
