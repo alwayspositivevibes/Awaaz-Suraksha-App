@@ -22,7 +22,7 @@ dependencies:
 
   # Encrypted, opt-in evidence storage
   cryptography: ^2.9.0
-  flutter_secure_storage: ^11.2.0
+  flutter_secure_storage: ^10.3.4
   share_plus: ^10.1.4
 
   # Text to Speech
