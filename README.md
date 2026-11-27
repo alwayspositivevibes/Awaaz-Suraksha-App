@@ -19,11 +19,6 @@ A zero-cloud, 100% on-device Android safety system that listens continuously in 
 
 ---
 
-## ⚡ How It Works (The Emergency Pipeline)
-[ 🎙️ Background Voice Guard (Foreground Service) ] │ ▼ Hears: "Help me now" / "Bachao" / "SOS Help" [ ⏱️ 5-Second Fail-Safe Countdown (Bilingual Voice Alert) ] │ │ ├─ If Safe: "I'm safe" ──► CANCELLED │ (No cancel within 5s) │ ▼ [ 🚨 ACTIVE SOS STATE ENGAGED ] ├── 📍 GPS Capture (High-accuracy satellite + network fallback) ├── 💬 WhatsApp Multi-Dispatch (Pre-filled live maps link to trusted contacts) ├── 🎙️ Local Audio Evidence Recording (.m4a secure local storage) └── 📞 Quick Access to Indian Emergency Helplines (112, 181, 100, 108)
-
----
-
 ## 🎯 Key Features
 
 <details open>
