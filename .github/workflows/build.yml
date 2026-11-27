@@ -33,10 +33,12 @@ jobs:
       - name: Ensure official Flutter Gradle setup
         run: |
           mkdir -p assets
+          cp -r android/app/src/main/res /tmp/saved_res
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
           rm -rf android
           flutter create --platforms=android --org com.awaaz .
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp -r /tmp/saved_res/mipmap-* android/app/src/main/res/
           sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle || true
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
@@ -44,7 +46,7 @@ jobs:
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '2.1.0'/g" android/build.gradle || true
 
       - name: Build debug APK (sideloadable, no signing needed)
-        run: flutter build apk --debug --target-platform android-arm64
+        run: flutter build apk --debug --target-platform android-arm64 --split-per-abi
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
