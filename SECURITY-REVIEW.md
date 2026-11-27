@@ -2,9 +2,9 @@
 
 ## Confirmed finding
 
-| # | Severity | Location | Finding | Confidence |
-|---|---|---|---|---|
-| 1 | Medium | `lib/main.dart`; `packages/awaaz_sms/android/src/main/kotlin/com/awaaz/sos/sms/AwaazSmsPlugin.kt` | Delimiter-based contact storage allowed a crafted name to alter the SMS destination after deserialization. | 8/10 |
+| # | Severity | File | Lines | Vulnerability | Confidence |
+|---|---|---|---|---|---|
+| 1 | 🟡 MEDIUM | `lib/main.dart`; `packages/awaaz_sms/android/src/main/kotlin/com/awaaz/sos/sms/AwaazSmsPlugin.kt` | Original `main.dart:238-242, 755`; bridge `30-45` | Delimiter-based contact storage allowed a crafted name to alter the SMS destination after deserialization. | 8/10 |
 
 **Status: fixed.** Contacts are now written as JSON. Legacy records migrate only when they have exactly one delimiter and pass name/phone validation. SMS destinations are normalized and checked in Dart, then constrained to valid Indian mobile numbers again in the Android bridge. The native bridge also rejects oversized SMS messages.
 
