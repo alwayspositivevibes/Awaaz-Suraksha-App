@@ -31,7 +31,15 @@ jobs:
         run: flutter pub get
 
       - name: Ensure official Flutter Gradle setup
-        run: cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml && rm -rf android && flutter create --platforms=android --org com.awaaz . && cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+        run: |
+          mkdir -p assets
+          cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
+          rm -rf android
+          flutter create --platforms=android --org com.awaaz .
+          cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle || true
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
 
       - name: Build debug APK (sideloadable, no signing needed)
         run: flutter build apk --debug --target-platform android-arm64
