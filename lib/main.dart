@@ -8,6 +8,10 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as notifications;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:awaaz_sms/awaaz_sms.dart';
+import 'package:cryptography/cryptography.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:vosk_flutter/vosk_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
@@ -32,18 +36,23 @@ class _BgHandler extends TaskHandler {
   double _lastMag = 0;
   double _sensitivity = 20;
   bool _sosTriggered = false;
+  bool _shakeEnabled = true;
   bool _sirenEnabled = true;
   bool _silentMode = false;
+  bool _demoMode = false;
 
   @override
   Future<void> onStart(DateTime ts, TaskStarter s) async {
     final p = await SharedPreferences.getInstance();
-    if (!(p.getBool('shake_enabled') ?? true)) return;
+    _shakeEnabled = p.getBool('shake_enabled') ?? true;
     _sensitivity = p.getDouble('shake_sensitivity') ?? 20;
     _sosTriggered = p.getBool('pending_background_sos') ?? false;
     _sirenEnabled = p.getBool('siren_enabled') ?? true;
     _silentMode = p.getBool('silent_mode') ?? false;
-    _shakeSub = accelerometerEventStream().listen(_onAccelerometerEvent);
+    _demoMode = p.getBool('demo_mode') ?? false;
+    if (_shakeEnabled) {
+      _shakeSub = accelerometerEventStream().listen(_onAccelerometerEvent);
+    }
     try {
       await _notifications.initialize(
         const notifications.InitializationSettings(
@@ -58,7 +67,7 @@ class _BgHandler extends TaskHandler {
   }
 
   void _onAccelerometerEvent(AccelerometerEvent event) {
-    if (_sosTriggered) return;
+    if (!_shakeEnabled || _sosTriggered) return;
     final mag = math.sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
     final delta = (mag - _lastMag).abs();
     _lastMag = mag;
@@ -69,30 +78,43 @@ class _BgHandler extends TaskHandler {
     _shakeTimes.add(now);
     if (_shakeTimes.length >= 3) {
       _shakeTimes.clear();
-      _triggerBackgroundSOS().catchError((Object error) {
+      _triggerBackgroundSOS('Shake detected').catchError((Object error) {
         print('Background SOS notification failed: $error');
       });
     }
   }
 
-  Future<void> _triggerBackgroundSOS() async {
+  Future<void> _triggerBackgroundSOS(String reason) async {
     if (_sosTriggered) return;
     _sosTriggered = true;
     final p = await SharedPreferences.getInstance();
     await p.setBool('pending_background_sos', true);
+    await p.setString('pending_sos_reason', reason);
+    await p.remove('checkin_deadline_ms');
 
     await FlutterForegroundTask.updateService(
       notificationTitle: 'SOS triggered',
-      notificationText: 'Shake detected. Open the app to continue the alert.',
+      notificationText: '$reason. Open the app to continue the alert.',
     );
-    FlutterForegroundTask.sendDataToMain({'command': 'shake'});
+
+    if (!_demoMode && (p.getBool('sms_alerts_enabled') ?? false)) {
+      await p.setBool('background_sos_sms_attempted', true);
+      final contacts = await StorageService.loadContacts();
+      final location = await LocationService.get(requestPermission: false);
+      final sent = await AlertService.sendSmsToContacts(
+        contacts,
+        AlertService.buildSmsMsg(location),
+      );
+      await p.setStringList('background_sos_sms_sent_contacts', sent);
+    }
+    FlutterForegroundTask.sendDataToMain({'command': 'background_sos'});
 
     final playSound = _sirenEnabled && !_silentMode;
     final channelId = playSound ? 'awaaz_sos_alert' : 'awaaz_sos_silent';
     await _notifications.show(
       1002,
       'SOS triggered',
-      'Shake detected. Open Awaaz Suraksha to continue the alert.',
+      '$reason. Open Awaaz Suraksha to continue the alert.',
       notifications.NotificationDetails(
         android: notifications.AndroidNotificationDetails(
           channelId,
@@ -112,7 +134,57 @@ class _BgHandler extends TaskHandler {
     );
   }
 
-  @override Future<void> onRepeatEvent(DateTime ts) async {}
+  Future<void> _processLiveShare(
+    SharedPreferences preferences,
+    int nowMillis,
+  ) async {
+    final until = preferences.getInt('live_share_until_ms') ?? 0;
+    if (until == 0) return;
+    if (nowMillis >= until) {
+      await preferences.remove('live_share_until_ms');
+      await preferences.remove('live_share_interval_ms');
+      await preferences.remove('live_share_last_update_ms');
+      await StorageService.addLog('Live location share expired');
+      return;
+    }
+
+    final interval = preferences.getInt('live_share_interval_ms') ?? 300000;
+    final lastUpdate = preferences.getInt('live_share_last_update_ms') ?? 0;
+    if (nowMillis - lastUpdate < interval) return;
+    await preferences.setInt('live_share_last_update_ms', nowMillis);
+
+    final location = await LocationService.get(requestPermission: false);
+    if (location['ok'] != true) {
+      await StorageService.addLog('Live location update unavailable: ${location['reason']}');
+      return;
+    }
+    final contacts = await StorageService.loadContacts();
+    final message = AlertService.buildLiveLocationMsg(
+      location,
+      until,
+      (interval / 60000).round(),
+    );
+    final sent = await AlertService.sendSmsToContacts(contacts, message);
+    await StorageService.addLog('Live location SMS queued for $sent/${contacts.length} contacts');
+  }
+
+  @override
+  Future<void> onRepeatEvent(DateTime ts) async {
+    final p = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final checkinDeadline = p.getInt('checkin_deadline_ms') ?? 0;
+    if (!_sosTriggered && checkinDeadline > 0 && now >= checkinDeadline) {
+      await _triggerBackgroundSOS('Check-in timer expired');
+    }
+    await _processLiveShare(p, now);
+    final checkinActive = (p.getInt('checkin_deadline_ms') ?? 0) > now;
+    final liveShareActive = (p.getInt('live_share_until_ms') ?? 0) > now;
+    if (!(p.getBool('shake_enabled') ?? true) &&
+        !checkinActive &&
+        !liveShareActive) {
+      await FlutterForegroundTask.stopService();
+    }
+  }
   @override
   Future<void> onDestroy(DateTime ts) async {
     await _shakeSub?.cancel();
@@ -179,8 +251,12 @@ class AppSettings {
   bool silentMode;
   bool shakeEnabled;
   bool demoMode;
+  bool smsAlertsEnabled;
+  bool evidenceEnabled;
   double shakeSensitivity;
   int checkinMinutes;
+  int liveShareMinutes;
+  int liveShareIntervalMinutes;
 
   AppSettings({
     this.wakeWord = 'help me now',
@@ -191,8 +267,12 @@ class AppSettings {
     this.silentMode = false,
     this.shakeEnabled = true,
     this.demoMode = false,
+    this.smsAlertsEnabled = false,
+    this.evidenceEnabled = false,
     this.shakeSensitivity = 20.0,
     this.checkinMinutes = 30,
+    this.liveShareMinutes = 30,
+    this.liveShareIntervalMinutes = 5,
   });
 
   static Future<AppSettings> load() async {
@@ -206,8 +286,12 @@ class AppSettings {
       silentMode: p.getBool('silent_mode') ?? false,
       shakeEnabled: p.getBool('shake_enabled') ?? true,
       demoMode: p.getBool('demo_mode') ?? false,
+      smsAlertsEnabled: p.getBool('sms_alerts_enabled') ?? false,
+      evidenceEnabled: p.getBool('evidence_enabled') ?? false,
       shakeSensitivity: p.getDouble('shake_sensitivity') ?? 20.0,
       checkinMinutes: p.getInt('checkin_minutes') ?? 30,
+      liveShareMinutes: p.getInt('live_share_minutes') ?? 30,
+      liveShareIntervalMinutes: p.getInt('live_share_interval_minutes') ?? 5,
     );
   }
 
@@ -221,15 +305,21 @@ class AppSettings {
     await p.setBool('silent_mode', silentMode);
     await p.setBool('shake_enabled', shakeEnabled);
     await p.setBool('demo_mode', demoMode);
+    await p.setBool('sms_alerts_enabled', smsAlertsEnabled);
+    await p.setBool('evidence_enabled', evidenceEnabled);
     await p.setDouble('shake_sensitivity', shakeSensitivity);
     await p.setInt('checkin_minutes', checkinMinutes);
+    await p.setInt('live_share_minutes', liveShareMinutes);
+    await p.setInt('live_share_interval_minutes', liveShareIntervalMinutes);
   }
 
   AppSettings copy() => AppSettings(
     wakeWord: wakeWord, localeId: localeId, languageLabel: languageLabel,
     voiceEnabled: voiceEnabled, sirenEnabled: sirenEnabled, silentMode: silentMode,
-    shakeEnabled: shakeEnabled, demoMode: demoMode, shakeSensitivity: shakeSensitivity,
-    checkinMinutes: checkinMinutes,
+    shakeEnabled: shakeEnabled, demoMode: demoMode, smsAlertsEnabled: smsAlertsEnabled,
+    evidenceEnabled: evidenceEnabled, shakeSensitivity: shakeSensitivity,
+    checkinMinutes: checkinMinutes, liveShareMinutes: liveShareMinutes,
+    liveShareIntervalMinutes: liveShareIntervalMinutes,
   );
 }
 
@@ -436,10 +526,12 @@ class StorageService {
     await p.clear();
     try {
       final dir = await getApplicationDocumentsDirectory();
-      dir.listSync().whereType<File>().where((f) => f.path.endsWith('.m4a')).forEach((f) {
+      dir.listSync().whereType<File>().where((f) =>
+          f.path.endsWith('.m4a') || f.path.endsWith('.enc')).forEach((f) {
         try { f.deleteSync(); } catch (_) {}
       });
     } catch (_) {}
+    await EvidenceStorage.clearKey();
   }
 }
 
@@ -451,6 +543,7 @@ class TtsService {
     _t.setSpeechRate(0.52);
     _t.setPitch(1.0);
     _t.setVolume(1.0);
+    _t.awaitSpeakCompletion(true);
   }
   void setMuted(bool v) => _muted = v;
   Future<void> speak(String s, {VoidCallback? onDone}) async {
@@ -463,11 +556,13 @@ class TtsService {
 }
 
 class LocationService {
-  static Future<Map<String, dynamic>> get() async {
+  static Future<Map<String, dynamic>> get({bool requestPermission = true}) async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) return {'ok': false, 'reason': 'GPS off'};
       var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied && requestPermission) {
+        perm = await Geolocator.requestPermission();
+      }
       if (perm == LocationPermission.deniedForever || perm == LocationPermission.denied) {
         return {'ok': false, 'reason': 'Permission denied'};
       }
@@ -485,10 +580,99 @@ class LocationService {
   static String mapsUrl(String lat, String lng) => 'https://maps.google.com/?q=$lat,$lng';
 }
 
+class EvidenceStorage {
+  static const _keyId = 'awaaz_evidence_aes256_key';
+  static const _header = <int>[65, 87, 65, 90, 49];
+  static const _headerLength = 5;
+  static const _nonceLength = 12;
+  static const _macLength = 16;
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  static final AesGcm _cipher = AesGcm.with256bits();
+
+  static Future<SecretKey> _getKey() async {
+    final stored = await _secureStorage.read(key: _keyId);
+    if (stored != null) return SecretKey(base64Decode(stored));
+
+    final key = await _cipher.newSecretKey();
+    await _secureStorage.write(
+      key: _keyId,
+      value: base64Encode(await key.extractBytes()),
+    );
+    return key;
+  }
+
+  static Future<File> encryptFile(
+    File source, {
+    bool deleteSourceOnFailure = false,
+  }) async {
+    try {
+      final secretBox = await _cipher.encrypt(
+        await source.readAsBytes(),
+        secretKey: await _getKey(),
+      );
+      final encrypted = File(
+        source.path.replaceFirst(RegExp(r'\.m4a$'), '.enc'),
+      );
+      final output = BytesBuilder(copy: false)
+        ..add(_header)
+        ..add(secretBox.nonce)
+        ..add(secretBox.mac.bytes)
+        ..add(secretBox.cipherText);
+      await encrypted.writeAsBytes(output.takeBytes(), flush: true);
+      await source.delete();
+      return encrypted;
+    } catch (_) {
+      if (deleteSourceOnFailure && await source.exists()) await source.delete();
+      rethrow;
+    }
+  }
+
+  static Future<File> decryptToTemporaryFile(File encrypted) async {
+    final data = await encrypted.readAsBytes();
+    final requiredLength = _headerLength + _nonceLength + _macLength;
+    if (data.length < requiredLength ||
+        !_header.asMap().entries.every((entry) => data[entry.key] == entry.value)) {
+      throw const FormatException('Unknown evidence file format.');
+    }
+    final secretBox = SecretBox(
+      data.sublist(requiredLength),
+      nonce: data.sublist(_headerLength, _headerLength + _nonceLength),
+      mac: Mac(data.sublist(_headerLength + _nonceLength, requiredLength)),
+    );
+    final plaintext = await _cipher.decrypt(
+      secretBox,
+      secretKey: await _getKey(),
+    );
+    final temp = await getTemporaryDirectory();
+    final file = File(
+      '${temp.path}${Platform.pathSeparator}awaaz-evidence-${DateTime.now().millisecondsSinceEpoch}.m4a',
+    );
+    await file.writeAsBytes(plaintext, flush: true);
+    return file;
+  }
+
+  static Future<void> share(File encrypted) async {
+    final plaintext = await decryptToTemporaryFile(encrypted);
+    try {
+      await Share.shareXFiles(
+        [XFile(plaintext.path)],
+        text: 'Awaaz Suraksha audio evidence',
+      );
+    } finally {
+      if (await plaintext.exists()) await plaintext.delete();
+    }
+  }
+
+  static Future<void> clearKey() => _secureStorage.delete(key: _keyId);
+}
+
 class RecordingService {
+  static const maxDuration = Duration(minutes: 10);
   final AudioRecorder _r = AudioRecorder();
   String? _path;
+  String? _encryptedPath;
   DateTime? _start;
+  bool _recording = false;
 
   Future<bool> start() async {
     try {
@@ -497,13 +681,37 @@ class RecordingService {
       _path = '${dir.path}/awaaz-evidence-$stamp.m4a';
       _start = DateTime.now();
       await _r.start(const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000), path: _path!);
+      _recording = true;
       return true;
-    } catch (_) { return false; }
+    } on Exception catch (error) {
+      await StorageService.addLog('Audio evidence recording failed: $error');
+      return false;
+    }
   }
 
   Duration get elapsed => _start != null ? DateTime.now().difference(_start!) : Duration.zero;
-  Future<String?> stop() async { try { return await _r.stop() ?? _path; } catch (_) { return _path; } }
-  Future<void> cancel() async { try { await _r.cancel(); } catch (_) {} }
+  Future<String?> stopAndEncrypt() async {
+    if (!_recording) return _encryptedPath;
+    final rawPath = await _r.stop() ?? _path;
+    _recording = false;
+    if (rawPath == null) return null;
+    final encrypted = await EvidenceStorage.encryptFile(
+      File(rawPath),
+      deleteSourceOnFailure: true,
+    );
+    _encryptedPath = encrypted.path;
+    return encrypted.path;
+  }
+
+  Future<void> cancel() async {
+    if (_recording) await _r.cancel();
+    _recording = false;
+    final source = _path;
+    if (source != null) {
+      final file = File(source);
+      if (await file.exists()) await file.delete();
+    }
+  }
 }
 
 class AlertService {
@@ -513,6 +721,15 @@ class AlertService {
       final url = LocationService.mapsUrl(loc['lat'], loc['lng']);
       final acc = loc['acc'] != null ? ' (±${loc['acc']}m)' : '';
       return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW!\n\n📍 Location$acc:\n$url\n\n⏰ $ts\n\n📞 Emergency: 112 | Women: 181 | Police: 100';
+    }
+
+    static String buildSmsMsg(Map<String, dynamic> loc) {
+      final time = DateTime.now().toString().substring(0, 16);
+      if (loc['ok'] == true) {
+        final url = LocationService.mapsUrl(loc['lat'], loc['lng']);
+        return 'SOS from Awaaz Suraksha. I need help. Location: $url Call 112. $time';
+      }
+      return 'SOS from Awaaz Suraksha. I need help. Location unavailable. Call me now or dial 112. $time';
     }
     return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW!\n📍 Location unavailable — call them NOW!\n\n⏰ $ts\n\n📞 Emergency: 112 | Women: 181 | Police: 100';
   }
@@ -530,6 +747,38 @@ class AlertService {
     } catch (_) {
       return false;
     }
+  }
+
+  static Future<List<String>> sendSmsToContacts(
+    List<Contact> contacts,
+    String message,
+  ) async {
+    final sent = <String>[];
+    for (final contact in contacts) {
+      try {
+        await AwaazSms.send(phoneNumber: contact.phone, message: message);
+        sent.add(contact.phone);
+      } on PlatformException catch (error) {
+        await StorageService.addLog(
+          'SMS failed for ${contact.name}: ${error.message ?? error.code}',
+        );
+      } on MissingPluginException catch (error) {
+        await StorageService.addLog('SMS service unavailable: $error');
+        break;
+      }
+    }
+    return sent;
+  }
+
+  static String buildLiveLocationMsg(
+    Map<String, dynamic> location,
+    int expiresAtMillis,
+    int intervalMinutes,
+  ) {
+    final expiry = DateTime.fromMillisecondsSinceEpoch(expiresAtMillis);
+    final expires = '${expiry.hour.toString().padLeft(2, '0')}:${expiry.minute.toString().padLeft(2, '0')}';
+    final url = LocationService.mapsUrl(location['lat'], location['lng']);
+    return 'Awaaz Suraksha live location: $url. Updates every $intervalMinutes min until $expires. If unsafe, call 112.';
   }
 
   static Future<void> call(Contact c) async {
@@ -577,6 +826,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) {
       setState(() { _loading = false; });
       await _handlePendingBackgroundSOS();
+      await _handlePendingTileSOS();
     }
   }
 
@@ -615,7 +865,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _onBgData(dynamic data) {
-    if (data is Map && data['command'] == 'shake' && mounted) {
+    if (data is Map && data['command'] == 'background_sos' && mounted) {
       _handlePendingBackgroundSOS();
     }
   }
@@ -626,11 +876,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final p = await SharedPreferences.getInstance();
       if (!(p.getBool('pending_background_sos') ?? false)) return;
+      final reason = p.getString('pending_sos_reason') ?? 'Shake to SOS';
+      final smsAttempted = p.getBool('background_sos_sms_attempted') ?? false;
       await p.remove('pending_background_sos');
-      if (mounted) await _triggerSOS(source: 'Shake to SOS');
+      await p.remove('pending_sos_reason');
+      if (mounted) {
+        await _triggerSOS(source: reason, backgroundSmsAttempted: smsAttempted);
+      }
     } finally {
       _handlingPendingSos = false;
     }
+  }
+
+  Future<void> _handlePendingTileSOS() async {
+    final p = await SharedPreferences.getInstance();
+    if (!(p.getBool('tile_sos_pending') ?? false)) return;
+    await p.remove('tile_sos_pending');
+    if (mounted) await _triggerSOS(source: 'Quick Settings SOS');
   }
 
   Future<void> _startBgService() async {
@@ -638,10 +900,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) setState(() => _serviceRunning = true);
       return;
     }
+    if (!(await Permission.locationWhenInUse.status).isGranted) {
+      if (mounted) {
+        setState(() {
+          _serviceRunning = false;
+          _transcript = 'Location permission is needed for the background safety service';
+        });
+      }
+      return;
+    }
+    final p = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final liveUntil = p.getInt('live_share_until_ms') ?? 0;
+    final checkinUntil = p.getInt('checkin_deadline_ms') ?? 0;
+    final title = liveUntil > now
+        ? 'Live location sharing active'
+        : checkinUntil > now ? 'Safety check-in armed' : '🛡️ Awaaz Suraksha Active';
+    final text = liveUntil > now
+        ? 'Sending location updates until ${DateTime.fromMillisecondsSinceEpoch(liveUntil).toLocal()}'
+        : checkinUntil > now
+            ? 'Your check-in timer is running; disarm when safe.'
+            : 'Shake three times quickly to trigger an SOS alert.';
     await FlutterForegroundTask.startService(
       serviceId: 1001,
-      notificationTitle: '🛡️ Awaaz Suraksha Active',
-      notificationText: 'Shake three times quickly to trigger an SOS alert.',
+      notificationTitle: title,
+      notificationText: text,
       callback: startCallback,
     );
     if (mounted) setState(() => _serviceRunning = true);
@@ -653,7 +936,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _syncShakeService({bool restart = false}) async {
-    if (!_settings.shakeEnabled) {
+    final p = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final checkinActive = (p.getInt('checkin_deadline_ms') ?? 0) > now;
+    final liveShareActive = (p.getInt('live_share_until_ms') ?? 0) > now;
+    if (!_settings.shakeEnabled && !checkinActive && !liveShareActive) {
       await _stopBgService();
       return;
     }
@@ -718,10 +1005,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _triggerSOS({required String source, bool forceSilent = false}) async {
+  Future<void> _triggerSOS({
+    required String source,
+    bool forceSilent = false,
+    bool backgroundSmsAttempted = false,
+  }) async {
     if (!mounted) return;
     if (_sosActive) return;
     _sosActive = true;
+    if (!backgroundSmsAttempted) {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('background_sos_sms_attempted');
+      await p.remove('background_sos_sms_sent_contacts');
+    }
     HapticFeedback.heavyImpact();
     _tts.setMuted(forceSilent || _settings.silentMode);
     StorageService.addLog('SOS triggered: $source');
@@ -733,6 +1029,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         isDemo: _settings.demoMode,
         isSilent: forceSilent || _settings.silentMode,
         sirenEnabled: _settings.sirenEnabled && !(forceSilent || _settings.silentMode),
+        smsAlertsEnabled: _settings.smsAlertsEnabled,
+        evidenceEnabled: _settings.evidenceEnabled,
         source: source,
         tts: _tts,
         voice: _voice,
@@ -781,6 +1079,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       _handlePendingBackgroundSOS();
+      _handlePendingTileSOS();
       if (_settings.voiceEnabled) _startVoice();
       AppSettings.load().then((s) { if (mounted) setState(() => _settings = s); });
       StorageService.loadContacts().then((c) { if (mounted) setState(() => _contacts = c); });
@@ -840,6 +1139,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       const _VaultTab(),
       _ToolsTab(
         settings: _settings,
+        contacts: _contacts,
+        onBackgroundMonitorChanged: () => _syncShakeService(restart: true),
         onFakeCall: (name) => Navigator.push(context, MaterialPageRoute(
             builder: (_) => FakeCallScreen(callerName: name), fullscreenDialog: true)),
         onCheckinExpired: () => unawaited(_triggerSOS(source: 'Check-in Timer Expired')),
@@ -1213,7 +1514,8 @@ class _VaultTabState extends State<_VaultTab> {
     setState(() => _loading = true);
     final log = await StorageService.loadLog();
     final dir = await getApplicationDocumentsDirectory();
-    final recs = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.m4a')).toList()
+    final recs = dir.listSync().whereType<File>().where((f) =>
+        f.path.endsWith('.m4a') || f.path.endsWith('.enc')).toList()
       ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
     if (mounted) setState(() { _log = log; _recs = recs; _loading = false; });
   }
@@ -1228,7 +1530,7 @@ class _VaultTabState extends State<_VaultTab> {
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _sectionHdr('🎙️ Audio Evidence Vault', '${_recs.length} file${_recs.length != 1 ? "s" : ""}', Icons.refresh, _load),
-          if (_recs.isEmpty) _empty('No recordings yet.\nAudio is auto-saved when SOS dispatches.'),
+          if (_recs.isEmpty) _empty('No evidence yet.\nRecording is off unless you opt in under Settings.'),
           ..._recs.map((f) => _recItem(f)),
           const SizedBox(height: 20),
           _sectionHdr('📋 Incident Log', '${_log.length} event${_log.length != 1 ? "s" : ""}', Icons.delete_sweep, () async {
@@ -1263,18 +1565,51 @@ class _VaultTabState extends State<_VaultTab> {
   Widget _recItem(File f) {
     final name = f.path.split('/').last;
     final sizeKb = (f.statSync().size / 1024).toStringAsFixed(1);
+    final encrypted = f.path.endsWith('.enc');
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(color: _kCard, border: Border.all(color: _kBorder), borderRadius: BorderRadius.circular(8)),
       child: Row(children: [
-        const Icon(Icons.audio_file, color: _kRed, size: 24),
+        Icon(encrypted ? Icons.lock : Icons.warning_amber, color: encrypted ? _kGreen : _kAmber, size: 24),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(name, style: const TextStyle(fontSize: 12, color: _kText, fontFamily: 'monospace'),
               maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text('$sizeKb KB', style: const TextStyle(fontSize: 11, color: _kMuted)),
+          Text(
+            encrypted ? '$sizeKb KB • AES-GCM encrypted' : '$sizeKb KB • legacy unencrypted',
+            style: const TextStyle(fontSize: 11, color: _kMuted),
+          ),
         ])),
+        if (encrypted)
+          IconButton(
+            icon: const Icon(Icons.share, color: _kGreen, size: 20),
+            tooltip: 'Decrypt temporarily and share',
+            onPressed: () async {
+              try {
+                await EvidenceStorage.share(f);
+              } on Exception catch (error) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Could not share evidence: $error')),
+                );
+              }
+            },
+          ),
+        if (!encrypted)
+          IconButton(
+            icon: const Icon(Icons.lock, color: _kAmber, size: 20),
+            tooltip: 'Encrypt legacy recording',
+            onPressed: () async {
+              try {
+                await EvidenceStorage.encryptFile(f);
+                await _load();
+              } on Exception catch (error) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Could not encrypt recording: $error')),
+                );
+              }
+            },
+          ),
         IconButton(icon: const Icon(Icons.delete_outline, color: _kRed, size: 20), onPressed: () async {
           try { await f.delete(); } catch (_) {}
           _load();
@@ -1308,41 +1643,236 @@ class _VaultTabState extends State<_VaultTab> {
 // ═══════════════════════════════════════════════════════════════
 class _ToolsTab extends StatefulWidget {
   final AppSettings settings;
+  final List<Contact> contacts;
+  final Future<void> Function() onBackgroundMonitorChanged;
   final Function(String) onFakeCall;
   final VoidCallback onCheckinExpired;
-  const _ToolsTab({required this.settings, required this.onFakeCall, required this.onCheckinExpired});
+  const _ToolsTab({
+    required this.settings,
+    required this.contacts,
+    required this.onBackgroundMonitorChanged,
+    required this.onFakeCall,
+    required this.onCheckinExpired,
+  });
   @override State<_ToolsTab> createState() => _ToolsTabState();
 }
 
 class _ToolsTabState extends State<_ToolsTab> {
   bool _armed = false;
+  bool _liveShareActive = false;
   Timer? _timer;
   Duration _remaining = Duration.zero;
+  int _checkinDeadlineMs = 0;
+  int _liveShareUntilMs = 0;
+  String _liveShareStatus = '';
   String _caller = 'Maa';
   int _delay = 0;
   final _callerOpts = ['Maa', 'Dad', 'Didi', 'Bhai', 'Friend', '112 Control Room'];
 
-  @override void dispose() { _timer?.cancel(); super.dispose(); }
+  @override
+  void initState() {
+    super.initState();
+    _restoreTimers();
+  }
 
-  void _arm() {
-    setState(() { _armed = true; _remaining = Duration(minutes: widget.settings.checkinMinutes); });
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
-      setState(() { _remaining -= const Duration(seconds: 1); });
-      if (_remaining.inSeconds <= 0) {
-        t.cancel();
-        setState(() => _armed = false);
+  @override
+  void dispose() { _timer?.cancel(); super.dispose(); }
+
+  Future<void> _restoreTimers() async {
+    final p = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final checkinDeadline = p.getInt('checkin_deadline_ms') ?? 0;
+    final shareUntil = p.getInt('live_share_until_ms') ?? 0;
+    if (checkinDeadline > now) {
+      _checkinDeadlineMs = checkinDeadline;
+      _armed = true;
+      _remaining = Duration(milliseconds: checkinDeadline - now);
+    } else if (checkinDeadline > 0) {
+      await p.remove('checkin_deadline_ms');
+      if (!(p.getBool('pending_background_sos') ?? false)) {
         widget.onCheckinExpired();
-        StorageService.addLog('Check-in expired — SOS triggered automatically');
       }
+    }
+    if (shareUntil > now) {
+      _liveShareUntilMs = shareUntil;
+      _liveShareActive = true;
+      _liveShareStatus = 'Live updates are active';
+    }
+    if (mounted) setState(() {});
+    if (_armed || _liveShareActive) _startDisplayTimer();
+  }
+
+  void _startDisplayTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_armed) {
+        final seconds = ((_checkinDeadlineMs - now) / 1000).ceil();
+        if (seconds <= 0) {
+          setState(() {
+            _armed = false;
+            _remaining = Duration.zero;
+          });
+        } else {
+          setState(() => _remaining = Duration(seconds: seconds));
+        }
+      }
+      if (_liveShareActive) {
+        if (now >= _liveShareUntilMs) {
+          _liveShareActive = false;
+          _liveShareStatus = 'Location sharing ended';
+        } else {
+          _liveShareStatus =
+              'Active — ${_fmt(Duration(milliseconds: _liveShareUntilMs - now))} remaining';
+        }
+        setState(() {});
+      }
+      if (!_armed && !_liveShareActive) _timer?.cancel();
     });
   }
 
-  void _disarm() {
+  Future<void> _arm() async {
+    final deadline = DateTime.now()
+        .add(Duration(minutes: widget.settings.checkinMinutes))
+        .millisecondsSinceEpoch;
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('checkin_deadline_ms', deadline);
+    setState(() {
+      _checkinDeadlineMs = deadline;
+      _remaining = Duration(minutes: widget.settings.checkinMinutes);
+      _armed = true;
+    });
+    _startDisplayTimer();
+    await widget.onBackgroundMonitorChanged();
+    await StorageService.addLog('Check-in timer armed');
+  }
+
+  Future<void> _disarm() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('checkin_deadline_ms');
     _timer?.cancel();
-    setState(() => _armed = false);
+    setState(() {
+      _armed = false;
+      _remaining = Duration.zero;
+    });
+    if (_liveShareActive) _startDisplayTimer();
+    await widget.onBackgroundMonitorChanged();
     StorageService.addLog('Check-in disarmed — user confirmed safe');
+  }
+
+  Future<void> _startLiveShare() async {
+    if (widget.settings.demoMode) {
+      setState(() => _liveShareStatus = 'Turn off Demo Mode before sending real SMS updates');
+      return;
+    }
+    if (!widget.settings.smsAlertsEnabled) {
+      setState(() => _liveShareStatus = 'Enable automatic SMS in Settings first');
+      return;
+    }
+    if (widget.contacts.isEmpty) {
+      setState(() => _liveShareStatus = 'Add a trusted contact before sharing');
+      return;
+    }
+    final smsPermission = await Permission.sms.request();
+    if (!smsPermission.isGranted) {
+      setState(() => _liveShareStatus = 'SMS permission is required');
+      return;
+    }
+    final foregroundLocation = await Permission.locationWhenInUse.request();
+    if (!foregroundLocation.isGranted) {
+      setState(() => _liveShareStatus = 'Location permission is required');
+      return;
+    }
+    final backgroundLocation = await Permission.locationAlways.request();
+    if (!backgroundLocation.isGranted) {
+      setState(() => _liveShareStatus =
+          'Allow location all the time in Android settings to share in background');
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: _kCard,
+          title: const Text('Background location needed', style: TextStyle(color: _kText)),
+          content: const Text(
+            'Android requires “Allow all the time” for location updates after you leave the app. You can enable it in App permissions.',
+            style: TextStyle(color: _kMuted),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Not now')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Open settings')),
+          ],
+        ),
+      );
+      if (openSettings == true) await openAppSettings();
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _kCard,
+        title: const Text('Start live location sharing?', style: TextStyle(color: _kText)),
+        content: Text(
+          'Awaaz Suraksha will text your ${widget.contacts.length} trusted contact(s) now, then every ${widget.settings.liveShareIntervalMinutes} minutes for ${widget.settings.liveShareMinutes} minutes. SMS and carrier charges may apply.',
+          style: const TextStyle(color: _kMuted),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Start sharing')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final location = await LocationService.get();
+    if (location['ok'] != true) {
+      setState(() => _liveShareStatus = 'Location unavailable: ${location['reason']}');
+      return;
+    }
+
+    final now = DateTime.now();
+    final until = now.add(Duration(minutes: widget.settings.liveShareMinutes));
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('live_share_until_ms', until.millisecondsSinceEpoch);
+    await p.setInt('live_share_interval_ms', widget.settings.liveShareIntervalMinutes * 60000);
+    await p.setInt('live_share_last_update_ms', now.millisecondsSinceEpoch);
+    await widget.onBackgroundMonitorChanged();
+
+    final sent = await AlertService.sendSmsToContacts(
+      widget.contacts,
+      AlertService.buildLiveLocationMsg(
+        location,
+        until.millisecondsSinceEpoch,
+        widget.settings.liveShareIntervalMinutes,
+      ),
+    );
+    if (sent.isEmpty) {
+      await _stopLiveShare(showStatus: false);
+      setState(() => _liveShareStatus = 'Could not send the first location SMS');
+      return;
+    }
+    setState(() {
+      _liveShareUntilMs = until.millisecondsSinceEpoch;
+      _liveShareActive = true;
+      _liveShareStatus = 'Updates sent to ${sent.length}/${widget.contacts.length} contact(s)';
+    });
+    _startDisplayTimer();
+    await StorageService.addLog('Live location sharing started for ${widget.settings.liveShareMinutes} minutes');
+  }
+
+  Future<void> _stopLiveShare({bool showStatus = true}) async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('live_share_until_ms');
+    await p.remove('live_share_interval_ms');
+    await p.remove('live_share_last_update_ms');
+    setState(() {
+      _liveShareActive = false;
+      _liveShareUntilMs = 0;
+      if (showStatus) _liveShareStatus = 'Location sharing stopped';
+    });
+    if (_armed) _startDisplayTimer(); else _timer?.cancel();
+    await widget.onBackgroundMonitorChanged();
+    await StorageService.addLog('Live location sharing stopped');
   }
 
   String _fmt(Duration d) =>
@@ -1386,6 +1916,50 @@ class _ToolsTabState extends State<_ToolsTab> {
                 style: ElevatedButton.styleFrom(backgroundColor: _kRed,
                     padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               )),
+          ]),
+        ),
+        const SizedBox(height: 20),
+
+        _secTitle('📍 Live Location Share'),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _kCard,
+            border: Border.all(color: _liveShareActive ? _kGreen : _kBorder),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              'Text your location every ${widget.settings.liveShareIntervalMinutes} minutes for ${widget.settings.liveShareMinutes} minutes.',
+              style: const TextStyle(fontSize: 13, color: _kMuted),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Requires automatic SMS and Android “Allow all the time” location permission. Carrier charges may apply.',
+              style: TextStyle(fontSize: 11, color: _kMuted),
+            ),
+            if (_liveShareStatus.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(_liveShareStatus, style: TextStyle(
+                fontSize: 12,
+                color: _liveShareActive ? _kGreen : _kAmber,
+              )),
+            ],
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _liveShareActive ? _stopLiveShare : _startLiveShare,
+                icon: Icon(_liveShareActive ? Icons.stop_circle : Icons.location_on),
+                label: Text(_liveShareActive ? 'STOP LIVE SHARING' : 'START LIVE SHARING'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _liveShareActive ? _kMuted : _kGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
           ]),
         ),
         const SizedBox(height: 20),
@@ -1544,7 +2118,7 @@ class _ContactsTabState extends State<_ContactsTab> {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(editing != null ? 'Edit Contact' : 'Add Trusted Contact',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _kText)),
-          const Text('Gets WhatsApp alert with GPS on SOS', style: TextStyle(fontSize: 12, color: _kMuted)),
+          const Text('Receives an SMS if enabled, and WhatsApp can be opened as a fallback.', style: TextStyle(fontSize: 12, color: _kMuted)),
           const SizedBox(height: 16),
           TextField(controller: nc, style: const TextStyle(color: _kText),
               decoration: _deco('Name', 'e.g. Maa, Didi, Best Friend'), textCapitalization: TextCapitalization.words, maxLength: 30),
@@ -1604,7 +2178,7 @@ class _ContactsTabState extends State<_ContactsTab> {
               const SizedBox(height: 16),
               const Text('No trusted contacts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _kText)),
               const SizedBox(height: 8),
-              const Text('Add up to 5 contacts.\nThey\'ll receive a WhatsApp SOS\nalert with your GPS location.',
+              const Text('Add up to 5 trusted contacts.\nThey can receive SOS SMS and WhatsApp alerts.',
                   textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: _kMuted)),
               const SizedBox(height: 20),
               ElevatedButton.icon(
@@ -1767,7 +2341,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _tog('Silent SOS Mode', 'No sound — stealth alert only', _s.silentMode, (v) => setState(() => _s.silentMode = v)),
             const Divider(color: _kBorder, height: 1),
             _tog('Demo Mode', 'Test SOS without sending real alerts', _s.demoMode, (v) => setState(() => _s.demoMode = v)),
+            const Divider(color: _kBorder, height: 1),
+            _tog(
+              'Automatic emergency SMS',
+              'Send SOS and live-location texts to trusted contacts. Carrier charges may apply; messages are never read.',
+              _s.smsAlertsEnabled,
+              (v) async {
+                if (v) {
+                  final permission = await Permission.sms.request();
+                  if (!permission.isGranted) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('SMS permission is needed for automatic alerts.')),
+                    );
+                    return;
+                  }
+                }
+                setState(() => _s.smsAlertsEnabled = v);
+              },
+            ),
+            const Divider(color: _kBorder, height: 1),
+            _tog(
+              'Encrypted audio evidence',
+              'Opt in to record during SOS. Files are AES-GCM encrypted on this device.',
+              _s.evidenceEnabled,
+              (v) => setState(() => _s.evidenceEnabled = v),
+            ),
           ]),
+          const SizedBox(height: 16),
+
+          _hdr('📍 Live Location Share'),
+          _card([Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 10), child: Column(children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text('Share for', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
+              Text('${_s.liveShareMinutes} minutes', style: const TextStyle(fontSize: 13, color: _kGreen, fontWeight: FontWeight.bold)),
+            ]),
+            Slider(
+              value: _s.liveShareMinutes.toDouble(),
+              min: 15,
+              max: 60,
+              divisions: 3,
+              activeColor: _kRed,
+              inactiveColor: _kBorder,
+              onChanged: (v) => setState(() => _s.liveShareMinutes = v.round()),
+            ),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text('15 min', style: TextStyle(fontSize: 11, color: _kMuted)),
+              Text('Update every ${_s.liveShareIntervalMinutes} min', style: const TextStyle(fontSize: 13, color: _kText)),
+              const Text('60 min', style: TextStyle(fontSize: 11, color: _kMuted)),
+            ]),
+            Slider(
+              value: _s.liveShareIntervalMinutes.toDouble(),
+              min: 5,
+              max: 15,
+              divisions: 2,
+              activeColor: _kGreen,
+              inactiveColor: _kBorder,
+              onChanged: (v) => setState(() => _s.liveShareIntervalMinutes = v.round()),
+            ),
+          ]))]),
           const SizedBox(height: 16),
 
           // Shake sensitivity
@@ -1809,11 +2440,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ListTile(
               leading: const Icon(Icons.delete_forever, color: _kRed),
               title: const Text('Wipe All Data', style: TextStyle(color: _kRed, fontWeight: FontWeight.bold)),
-              subtitle: const Text('Delete all contacts, logs, and recordings', style: TextStyle(color: _kMuted, fontSize: 12)),
+              subtitle: const Text('Delete contacts, logs, encrypted recordings, and their key', style: TextStyle(color: _kMuted, fontSize: 12)),
               onTap: () => showDialog(context: context, builder: (_) => AlertDialog(
                 backgroundColor: _kCard,
                 title: const Text('⚠️ Wipe All Data?', style: TextStyle(color: _kText)),
-                content: const Text('Permanently deletes all contacts, incident logs, and audio recordings. Cannot be undone.',
+                content: const Text('Permanently deletes all contacts, incident logs, encrypted audio recordings, and the encryption key. Cannot be undone.',
                     style: TextStyle(color: _kMuted)),
                 actions: [
                   TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: _kMuted))),
@@ -1878,7 +2509,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 // ═══════════════════════════════════════════════════════════════
 class SosActiveScreen extends StatefulWidget {
   final List<Contact> contacts;
-  final bool isDemo, isSilent, sirenEnabled;
+  final bool isDemo, isSilent, sirenEnabled, smsAlertsEnabled, evidenceEnabled;
   final String source;
   final TtsService tts;
   final VoiceCommandService voice;
@@ -1887,7 +2518,8 @@ class SosActiveScreen extends StatefulWidget {
   const SosActiveScreen({
     super.key,
     required this.contacts, required this.isDemo, required this.isSilent,
-    required this.sirenEnabled, required this.source, required this.tts,
+    required this.sirenEnabled, required this.smsAlertsEnabled,
+    required this.evidenceEnabled, required this.source, required this.tts,
     required this.voice, required this.onDeactivated,
   });
 
@@ -1930,12 +2562,15 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
 
     WakelockPlus.enable();
     _startCountdown();
-    _startVoiceCancel();
     if (widget.sirenEnabled) _siren.start();
   }
 
   void _startCountdown() {
-    widget.tts.speak('Awaaz Suraksha SOS activated. Sending alert in 5 seconds. Say I\'m safe to cancel.');
+    unawaited(widget.tts
+        .speak('Awaaz Suraksha SOS activated. Sending alert in 5 seconds. Say I\'m safe to cancel.')
+        .then((_) {
+      if (!_cancelled && !_dispatched) _startVoiceCancel();
+    }));
     _cdTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (_cancelled) { t.cancel(); return; }
       if (mounted) setState(() => _cd--);
@@ -1947,24 +2582,32 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
     if (_cancelled || _dispatched) return;
     _dispatched = true;
     if (mounted) setState(() => _alertStatus = 'Dispatching…');
-    widget.tts.speak('Alerting your contacts now. Stay calm. Help is on the way.');
+    await widget.voice.stop();
+    await widget.tts.speak('Alerting your contacts now. Stay calm. Help is on the way.');
 
-    // Start recording
-    if (mounted) setState(() => _recStatus = 'Starting…');
-    final recOk = await _rec.start();
-    if (recOk) {
-      if (mounted) setState(() => _recStatus = '🔴 Recording 00:00');
-      _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted) return;
-        setState(() {
-          _recElapsed = _rec.elapsed;
-          final mm = _recElapsed.inMinutes.toString().padLeft(2, '0');
-          final ss = (_recElapsed.inSeconds % 60).toString().padLeft(2, '0');
-          _recStatus = '🔴 Recording $mm:$ss';
+    if (widget.evidenceEnabled) {
+      if (mounted) setState(() => _recStatus = 'Starting encrypted recording…');
+      final recOk = await _rec.start();
+      if (recOk) {
+        if (mounted) setState(() => _recStatus = '🔴 Recording 00:00');
+        _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!mounted) return;
+          setState(() {
+            _recElapsed = _rec.elapsed;
+            final mm = _recElapsed.inMinutes.toString().padLeft(2, '0');
+            final ss = (_recElapsed.inSeconds % 60).toString().padLeft(2, '0');
+            _recStatus = '🔴 Recording $mm:$ss';
+          });
+          if (_rec.elapsed >= RecordingService.maxDuration) {
+            _recTimer?.cancel();
+            _stopEvidenceAtLimit();
+          }
         });
-      });
+      } else {
+        if (mounted) setState(() => _recStatus = '⚠ Recording unavailable');
+      }
     } else {
-      if (mounted) setState(() => _recStatus = '⚠ Mic denied — check permissions');
+      if (mounted) setState(() => _recStatus = 'Evidence recording is off');
     }
 
     // GPS
@@ -1986,15 +2629,51 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
       if (mounted) setState(() => _alertStatus = '⚡ DEMO — nothing sent');
     } else {
       final msg = AlertService.buildMsg(loc);
-      int opened = 0;
+      final smsMsg = AlertService.buildSmsMsg(loc);
+      final prefs = await SharedPreferences.getInstance();
+      final backgroundAttempted = prefs.getBool('background_sos_sms_attempted') ?? false;
+      final backgroundSent = prefs.getStringList('background_sos_sms_sent_contacts') ?? [];
+      await prefs.remove('background_sos_sms_attempted');
+      await prefs.remove('background_sos_sms_sent_contacts');
+      int smsQueued = 0;
+      int whatsappOpened = 0;
       for (final c in widget.contacts) {
-        final ok = await AlertService.whatsapp(c, msg);
-        if (ok) opened++;
+        var smsOk = false;
+        if (widget.smsAlertsEnabled) {
+          if (backgroundAttempted && backgroundSent.contains(c.phone)) {
+            smsOk = true;
+          } else {
+            smsOk = (await AlertService.sendSmsToContacts([c], smsMsg)).contains(c.phone);
+          }
+        }
+        if (smsOk) {
+          smsQueued++;
+        } else if (await AlertService.whatsapp(c, msg)) {
+          whatsappOpened++;
+        }
         await Future.delayed(const Duration(milliseconds: 600));
       }
-      if (mounted) setState(() => _alertStatus = widget.contacts.isEmpty
-          ? '⚠ No contacts — dial 112!'
-          : opened > 0 ? '✅ Sent to $opened/${widget.contacts.length}' : '⚠ WhatsApp blocked — tap Call below');
+      if (mounted) setState(() {
+        if (widget.contacts.isEmpty) {
+          _alertStatus = '⚠ No contacts — dial 112!';
+        } else if (smsQueued > 0) {
+          _alertStatus = '✅ SMS queued for $smsQueued/${widget.contacts.length}; WhatsApp opened for $whatsappOpened';
+        } else if (whatsappOpened > 0) {
+          _alertStatus = 'WhatsApp opened for $whatsappOpened/${widget.contacts.length}; tap Send';
+        } else {
+          _alertStatus = '⚠ Alerts could not be opened — tap Call below';
+        }
+      });
+    }
+  }
+
+  Future<void> _stopEvidenceAtLimit() async {
+    try {
+      final savedPath = await _rec.stopAndEncrypt();
+      if (mounted) setState(() => _recStatus =
+          savedPath == null ? 'Recording stopped' : '🔒 Encrypted recording saved (10 min limit)');
+    } on Exception catch (error) {
+      if (mounted) setState(() => _recStatus = 'Evidence encryption failed: $error');
     }
   }
 
@@ -2026,13 +2705,21 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
     await widget.tts.stop();
 
     if (_dispatched) {
-      final savedPath = await _rec.stop();
+      String? savedPath;
+      if (widget.evidenceEnabled) {
+        try {
+          savedPath = await _rec.stopAndEncrypt();
+        } on Exception catch (error) {
+          await StorageService.addLog('Evidence encryption failed: $error');
+          if (mounted) setState(() => _recStatus = 'Evidence encryption failed');
+        }
+      }
       if (!widget.isSilent) await widget.tts.speak('Awaaz Suraksha deactivated. You are safe now.');
       await StorageService.addLog('SOS deactivated by: $reason');
       if (mounted && savedPath != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           backgroundColor: _kCard,
-          content: Text('Audio evidence saved:\n$savedPath', style: const TextStyle(color: _kText, fontSize: 12)),
+          content: Text('Encrypted audio evidence saved:\n$savedPath', style: const TextStyle(color: _kText, fontSize: 12)),
           duration: const Duration(seconds: 6),
         ));
       }

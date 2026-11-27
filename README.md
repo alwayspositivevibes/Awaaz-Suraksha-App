@@ -46,8 +46,22 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 
 ### 📳 Background Shake Detection
 - Shake the phone 3× within 1.5 seconds to trigger SOS, including while the screen is locked
-- Raises an immediate SOS notification; open the app to continue contact alerts
+- Raises an immediate SOS notification; if automatic SMS is enabled, texts saved contacts with location when available
 - Continues after dismissing the app from Recents, but not after Android force-stop or device reboot
+
+### ⏱️ Persistent Check-In
+- Arms a deadline that survives app backgrounding; if it expires, the foreground service raises SOS
+- Automatic SMS is sent only when enabled and SMS permission is granted
+
+### 📍 Time-Limited Live Location
+- Sends an initial map link, then updated map links at the selected interval
+- Stops automatically after the selected duration; user can stop earlier
+- Requires SMS permission, foreground location, and Android “Allow all the time” location permission
+- SMS and carrier charges may apply; no location server or cloud account is used
+
+### ⚡ Quick Settings SOS Tile
+- Add “Awaaz SOS” from Android’s Quick Settings tile editor for a one-tap SOS shortcut
+- Lock-screen access varies by Android version and device security settings
 
 ### 🚨 Multi-Trigger SOS
 | Trigger | How |
@@ -59,13 +73,16 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 
 ### 📍 GPS + WhatsApp Alert
 - Captures GPS in 5–8s (high accuracy first, falls back to network)
-- Sends Google Maps link to ALL trusted contacts via WhatsApp
+- Opens a Google Maps link to trusted contacts through WhatsApp; the user taps Send
+- Optional automatic SMS sends a shorter SOS and map link directly to saved contacts
 - Alert message includes coordinates, timestamp, emergency numbers
-- Fallback: direct call buttons if WhatsApp fails
+- Fallback: WhatsApp or direct call buttons if SMS is disabled or unavailable
 
 ### 🎙️ Audio Evidence Vault
-- Auto-starts recording on SOS dispatch
-- Saves as timestamped `.m4a` to private app storage
+- Recording is off by default; enable “Encrypted audio evidence” in Settings to opt in
+- Encrypts saved recordings with AES-GCM and stores the key in Android secure storage
+- Share decrypts to a temporary file and removes that copy after sharing
+- Recording is limited to 10 minutes per SOS; legacy unencrypted recordings can be encrypted from the Vault
 - 128kbps AAC — clear voice quality
 - Shows live recording duration on SOS screen
 
@@ -96,10 +113,13 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 |---------|--------|
 | Root detection | ✅ Warns user |
 | Screenshot prevention | ✅ FLAG_SECURE via System |
-| Local-only storage | ✅ No cloud, no servers |
+| Encrypted audio | ✅ AES-GCM; opt-in; device-held key |
+| Location sharing | ✅ SMS only to user-selected contacts; no server |
 | Input sanitization | ✅ Phone number validation |
 | No analytics/tracking | ✅ Zero data collection |
 | Offline-first | ✅ Works with no internet |
+
+Emergency and live-location SMS leave the phone through the cellular carrier when enabled. Automatic SMS requires Android’s restricted `SEND_SMS` permission, and continuous sharing requires background location. Google Play may restrict these permissions; this project’s APK is intended for direct installation. Force-stop, battery restrictions, or manufacturer task-killing can stop background work.
 
 ---
 
@@ -112,7 +132,9 @@ lib/main.dart (single-file Flutter app)
 ├── TtsService                — flutter_tts (en-IN, rate 0.52)
 ├── LocationService           — geolocator (high-acc + network fallback)
 ├── RecordingService          — record (AAC 128kbps)
-├── WhatsAppService           — url_launcher (wa.me deep link)
+├── AwaazSms                  — minimal native SMS bridge usable from background task isolate
+├── EvidenceStorage           — AES-GCM files + Android secure key storage
+├── SosTileService            — Android Quick Settings SOS tile
 ├── SecurityService           — Root detection
 ├── HomeScreen                — Main UI + shake/voice guard
 ├── SosActiveScreen           — Active SOS countdown + dispatch
@@ -128,12 +150,12 @@ lib/main.dart (single-file Flutter app)
 | Framework | Flutter 3.27.1 |
 | Language | Dart 3.3+ |
 | Background | flutter_foreground_task 8.11 |
-| Voice | speech_to_text 6.6.2 |
+| Voice | Offline Vosk Indian-English model |
 | TTS | flutter_tts 4.0.2 |
 | GPS | geolocator 13.0.2 |
 | Audio | record 6.0.0 |
 | Sensors | sensors_plus 5.0.1 |
-| Storage | shared_preferences 2.3.3 |
+| Storage | shared_preferences + flutter_secure_storage |
 | Permissions | permission_handler 11.3.1 |
 | Build | GitHub Actions + Flutter 3.27.1 + Java 17 |
 

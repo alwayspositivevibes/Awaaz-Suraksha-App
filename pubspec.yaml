@@ -16,6 +16,15 @@ dependencies:
       url: https://github.com/alphacep/vosk-flutter.git
       ref: e655a96f0ce0dadb5ea8900aa1ba23260c3ec904
 
+  # Direct emergency SMS from the app and foreground-service isolate
+  awaaz_sms:
+    path: packages/awaaz_sms
+
+  # Encrypted, opt-in evidence storage
+  cryptography: ^2.9.0
+  flutter_secure_storage: ^11.2.0
+  share_plus: ^10.1.4
+
   # Text to Speech
   flutter_tts: ^4.0.2
 

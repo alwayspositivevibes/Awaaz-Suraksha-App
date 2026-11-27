@@ -35,6 +35,7 @@ jobs:
           # Save our custom files before flutter create wipes android/
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
           cp android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt /tmp/MainActivity.kt
+          cp android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt /tmp/SosTileService.kt
 
           # Save icons
           mkdir -p /tmp/icons
@@ -58,6 +59,7 @@ jobs:
           # Restore the native siren MethodChannel
           mkdir -p android/app/src/main/kotlin/com/awaaz/sos
           cp /tmp/MainActivity.kt android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
+          cp /tmp/SosTileService.kt android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
 
           # Restore icons
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
