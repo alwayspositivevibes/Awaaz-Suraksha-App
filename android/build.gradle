@@ -5,6 +5,16 @@ allprojects {
     }
 }
 
+gradle.beforeProject { project ->
+    if (!project.hasProperty('flutter')) {
+        project.ext.flutter = [
+            compileSdkVersion: 36,
+            minSdkVersion: 24,
+            targetSdkVersion: 36
+        ]
+    }
+}
+
 rootProject.buildDir = "../build"
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
