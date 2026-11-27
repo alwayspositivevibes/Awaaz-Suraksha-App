@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart' as notifications;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -26,8 +26,8 @@ void startCallback() => FlutterForegroundTask.setTaskHandler(_BgHandler());
 class _BgHandler extends TaskHandler {
   StreamSubscription<AccelerometerEvent>? _shakeSub;
   final List<DateTime> _shakeTimes = [];
-  final FlutterLocalNotificationsPlugin _notifications =
-      FlutterLocalNotificationsPlugin();
+  final notifications.FlutterLocalNotificationsPlugin _notifications =
+      notifications.FlutterLocalNotificationsPlugin();
   double _lastMag = 0;
   double _sensitivity = 20;
   bool _sosTriggered = false;
@@ -45,8 +45,8 @@ class _BgHandler extends TaskHandler {
     _shakeSub = accelerometerEventStream().listen(_onAccelerometerEvent);
     try {
       await _notifications.initialize(
-        const InitializationSettings(
-          android: AndroidInitializationSettings('ic_launcher'),
+        const notifications.InitializationSettings(
+          android: notifications.AndroidInitializationSettings('ic_launcher'),
         ),
       );
     } on MissingPluginException catch (error) {
@@ -92,19 +92,19 @@ class _BgHandler extends TaskHandler {
       1002,
       'SOS triggered',
       'Shake detected. Open Awaaz Suraksha to continue the alert.',
-      NotificationDetails(
-        android: AndroidNotificationDetails(
+      notifications.NotificationDetails(
+        android: notifications.AndroidNotificationDetails(
           channelId,
           playSound ? 'SOS alerts' : 'Silent SOS alerts',
           channelDescription: 'Alerts triggered by shake detection.',
-          importance: Importance.max,
-          priority: Priority.max,
-          category: AndroidNotificationCategory.alarm,
+          importance: notifications.Importance.max,
+          priority: notifications.Priority.max,
+          category: notifications.AndroidNotificationCategory.alarm,
           playSound: playSound,
           enableVibration: true,
           vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 700]),
-          audioAttributesUsage: AudioAttributesUsage.alarm,
-          visibility: NotificationVisibility.public,
+          audioAttributesUsage: notifications.AudioAttributesUsage.alarm,
+          visibility: notifications.NotificationVisibility.public,
         ),
       ),
       payload: 'background_sos',
