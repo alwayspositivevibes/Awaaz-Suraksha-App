@@ -22,66 +22,38 @@ import 'dart:math' as math;
 void startCallback() => FlutterForegroundTask.setTaskHandler(_BgHandler());
 
 class _BgHandler extends TaskHandler {
-  SpeechToText _st = SpeechToText();
-  bool _ready = false;
-  bool _destroyed = false;
-  Timer? _restartTimer;
-  String _wakeWord = 'help me now';
-  String _locale = 'en_IN';
+  StreamSubscription<AccelerometerEvent>? _shakeSub;
+  final List<DateTime> _shakeTimes = [];
+  double _lastMag = 0;
+  double _sensitivity = 20;
 
   @override
   Future<void> onStart(DateTime ts, TaskStarter s) async {
-    _destroyed = false;
     final p = await SharedPreferences.getInstance();
-    _wakeWord = (p.getString('wake_word') ?? 'help me now').toLowerCase();
-    _locale = p.getString('locale_id') ?? 'en_IN';
-    _ready = await _st.initialize(
-      onStatus: (st) {
-        if (st == 'done' || st == 'notListening') _restart();
-      },
-    );
-    if (_ready) _listen();
+    if (!(p.getBool('shake_enabled') ?? true)) return;
+    _sensitivity = p.getDouble('shake_sensitivity') ?? 20;
+    _shakeSub = accelerometerEventStream().listen(_onAccelerometerEvent);
   }
 
-  void _listen() {
-    if (!_ready) return;
-    _st.listen(
-      onResult: (r) {
-        final t = r.recognizedWords.toLowerCase();
-        if (_matchWake(t)) FlutterForegroundTask.sendDataToMain({'command': 'wake'});
-        if (_matchSafe(t)) FlutterForegroundTask.sendDataToMain({'command': 'safe'});
-      },
-      listenFor: const Duration(minutes: 5),
-      pauseFor: const Duration(minutes: 5),
-      localeId: _locale,
-      cancelOnError: false,
-      partialResults: true,
-    );
-  }
+  void _onAccelerometerEvent(AccelerometerEvent event) {
+    final mag = math.sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+    final delta = (mag - _lastMag).abs();
+    _lastMag = mag;
+    if (delta <= _sensitivity) return;
 
-  void _restart() {
-    if (!_ready || _destroyed || _restartTimer?.isActive == true) return;
-    _restartTimer = Timer(const Duration(milliseconds: 400), () {
-      _restartTimer = null;
-      if (!_destroyed) _listen();
-    });
+    final now = DateTime.now();
+    _shakeTimes.removeWhere((time) => now.difference(time).inMilliseconds >= 1500);
+    _shakeTimes.add(now);
+    if (_shakeTimes.length >= 3) {
+      _shakeTimes.clear();
+      FlutterForegroundTask.sendDataToMain({'command': 'shake'});
+    }
   }
-
-  bool _matchWake(String t) {
-    if (t.contains(_wakeWord)) return true;
-    return RegExp(r'(help\s+me\s+now|bachao|बचाओ|madat\s+karo|help\s+me|emergency)').hasMatch(t);
-  }
-
-  bool _matchSafe(String t) =>
-      RegExp(r"(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos|safe\s+now|im\s+safe)").hasMatch(t);
 
   @override Future<void> onRepeatEvent(DateTime ts) async {}
   @override
   Future<void> onDestroy(DateTime ts) async {
-    _destroyed = true;
-    _ready = false;
-    _restartTimer?.cancel();
-    await _st.cancel();
+    await _shakeSub?.cancel();
   }
 }
 
@@ -411,12 +383,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _transcript = 'Initialising…';
   bool _serviceRunning = false;
   bool _loading = true;
+  bool _sosActive = false;
+  Timer? _voiceRestartTimer;
 
   final TtsService _tts = TtsService();
   SpeechToText _speech = SpeechToText();
-  StreamSubscription<AccelerometerEvent>? _shakeSub;
-  List<DateTime> _shakeTimes = [];
-  double _lastMag = 0;
 
   @override
   void initState() {
@@ -428,12 +399,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _init() async {
     _settings = await AppSettings.load();
     _contacts = await StorageService.loadContacts();
-    await WakelockPlus.enable();
     _initFg();
     await _requestPerms();
     if (_settings.voiceEnabled) await _startVoice();
-    else await _stopBgService();
-    if (_settings.shakeEnabled) _startShake();
+    await _syncShakeService();
     if (mounted) setState(() { _loading = false; });
   }
 
@@ -455,7 +424,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'awaaz_guard_v2',
         channelName: 'Awaaz Suraksha Guard',
-        channelDescription: 'Background voice listener — say "${_settings.wakeWord}" anytime.',
+        channelDescription: 'Shake three times quickly to trigger an SOS alert.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
       ),
@@ -472,10 +441,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _onBgData(dynamic data) {
-    if (data is Map && data['command'] == 'wake' && mounted) {
-      _triggerSOS(source: 'Voice (Background)');
-    } else if (data is Map && data['command'] == 'safe') {
-      // The active SOS screen has its own recognizer and handles cancellation.
+    if (data is Map && data['command'] == 'shake' && mounted) {
+      _triggerSOS(source: 'Shake to SOS (Background)');
     }
   }
 
@@ -484,7 +451,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await FlutterForegroundTask.startService(
       serviceId: 1001,
       notificationTitle: '🛡️ Awaaz Suraksha Active',
-      notificationText: 'Say "${_settings.wakeWord}" anytime • Shake 3× for SOS',
+      notificationText: 'Shake three times quickly to trigger an SOS alert.',
       callback: startCallback,
     );
     if (mounted) setState(() => _serviceRunning = true);
@@ -495,8 +462,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) setState(() => _serviceRunning = false);
   }
 
+  Future<void> _syncShakeService({bool restart = false}) async {
+    if (!_settings.shakeEnabled) {
+      await _stopBgService();
+      return;
+    }
+    if (restart && await FlutterForegroundTask.isRunningService) {
+      await _stopBgService();
+    }
+    await _startBgService();
+  }
+
   Future<void> _startVoice() async {
     final ready = await _speech.initialize(
+      onStatus: (status) {
+        if ((status == 'done' || status == 'notListening') &&
+            !_sosActive &&
+            _settings.voiceEnabled &&
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+          _scheduleVoiceRestart();
+        }
+      },
       onError: (e) {
         if (mounted) setState(() {
           _micOk = false;
@@ -505,40 +491,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
     if (mounted) setState(() => _micOk = ready);
-    if (ready) {
-      await _startBgService();
+    if (ready && !_sosActive) {
+      _listenLoop();
       if (mounted) setState(() => _transcript = '🎙 Listening for "${_settings.wakeWord}"…');
     } else {
       if (mounted) setState(() => _transcript = '⚠ Mic unavailable — tap "Grant Mic" button');
     }
   }
 
-  void _startShake() {
-    _shakeSub?.cancel();
-    _shakeSub = accelerometerEventStream().listen((e) {
-      if (!_settings.shakeEnabled || !mounted) return;
-      final mag = math.sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
-      final delta = (mag - _lastMag).abs();
-      _lastMag = mag;
-      if (delta > _settings.shakeSensitivity) {
-        final now = DateTime.now();
-        _shakeTimes = _shakeTimes.where((t) => now.difference(t).inMilliseconds < 1500).toList();
-        _shakeTimes.add(now);
-        if (_shakeTimes.length >= 3) {
-          _shakeTimes.clear();
-          _triggerSOS(source: 'Shake to SOS');
+  void _listenLoop() {
+    if (!_settings.voiceEnabled ||
+        _sosActive ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+        !_speech.isAvailable ||
+        _speech.isListening) {
+      return;
+    }
+    _speech.listen(
+      onResult: (result) {
+        final text = result.recognizedWords;
+        if (text.isNotEmpty && mounted) {
+          setState(() => _transcript = '🎙 Heard: $text');
         }
-      }
+        final normalized = text.toLowerCase();
+        final custom = RegExp(RegExp.escape(_settings.wakeWord.toLowerCase()));
+        final builtIn = RegExp(r'(help\s+me\s+now|bachao|बचाओ|help\s+me|emergency\s+sos)');
+        if (custom.hasMatch(normalized) || builtIn.hasMatch(normalized)) {
+          _triggerSOS(source: 'Voice Trigger');
+        }
+      },
+      listenFor: const Duration(minutes: 5),
+      pauseFor: const Duration(minutes: 5),
+      localeId: _settings.localeId,
+      cancelOnError: false,
+      partialResults: true,
+    );
+  }
+
+  void _scheduleVoiceRestart() {
+    if (_voiceRestartTimer?.isActive == true) return;
+    _voiceRestartTimer = Timer(const Duration(milliseconds: 500), () {
+      _voiceRestartTimer = null;
+      _listenLoop();
     });
   }
 
   void _triggerSOS({required String source, bool forceSilent = false}) {
     if (!mounted) return;
+    if (_sosActive) return;
+    _sosActive = true;
     HapticFeedback.heavyImpact();
     _tts.setMuted(forceSilent || _settings.silentMode);
     StorageService.addLog('SOS triggered: $source');
+    _voiceRestartTimer?.cancel();
+    _voiceRestartTimer = null;
     _speech.cancel();
-    _stopBgService();
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => SosActiveScreen(
         contacts: List.from(_contacts),
@@ -548,8 +555,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         source: source,
         tts: _tts,
         onDeactivated: () {
+          _sosActive = false;
           _tts.setMuted(false);
           if (_settings.voiceEnabled && mounted) _startVoice();
+          if (mounted) _syncShakeService();
         },
       ),
       fullscreenDialog: true,
@@ -583,23 +592,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() { _settings = s; _contacts = c; });
     await _speech.cancel();
     if (_settings.voiceEnabled) await _startVoice();
-    if (_settings.shakeEnabled) _startShake(); else _shakeSub?.cancel();
+    await _syncShakeService(restart: true);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       if (_settings.voiceEnabled) _startVoice();
-      WakelockPlus.enable();
       AppSettings.load().then((s) { if (mounted) setState(() => _settings = s); });
       StorageService.loadContacts().then((c) { if (mounted) setState(() => _contacts = c); });
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _voiceRestartTimer?.cancel();
+      _voiceRestartTimer = null;
+      _speech.cancel();
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _shakeSub?.cancel();
+    _voiceRestartTimer?.cancel();
+    _speech.cancel();
     FlutterForegroundTask.removeTaskDataCallback(_onBgData);
     super.dispose();
   }
@@ -632,13 +646,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onGrantMic: _grantMic, onGrantGps: _grantGps,
         onToggleVoice: (v) async {
           _settings.voiceEnabled = v; await _settings.save(); setState(() {});
-          if (v) { await _startVoice(); } else { await _speech.cancel(); await _stopBgService(); }
+          if (v) { await _startVoice(); } else { await _speech.cancel(); }
         },
         onToggleSilent: (v) async { _settings.silentMode = v; await _settings.save(); setState(() {}); },
         onToggleSiren: (v) async { _settings.sirenEnabled = v; await _settings.save(); setState(() {}); },
         onToggleShake: (v) async {
           _settings.shakeEnabled = v; await _settings.save(); setState(() {});
-          if (v) _startShake(); else _shakeSub?.cancel();
+          await _syncShakeService(restart: true);
         },
         onShowFakeCall: (name) => Navigator.push(context, MaterialPageRoute(
             builder: (_) => FakeCallScreen(callerName: name), fullscreenDialog: true)),
@@ -860,7 +874,7 @@ class _SosTab extends StatelessWidget {
         Container(
           decoration: BoxDecoration(color: _kCard, border: Border.all(color: _kBorder), borderRadius: BorderRadius.circular(8)),
           child: Column(children: [
-            _tRow(Icons.record_voice_over, 'Voice Wake Word', '"${settings.wakeWord}" always listening', settings.voiceEnabled, onToggleVoice),
+            _tRow(Icons.record_voice_over, 'Voice Wake Word', 'Listen while Awaaz Suraksha is open', settings.voiceEnabled, onToggleVoice),
             const Divider(color: _kBorder, height: 1),
             _tRow(Icons.visibility_off, 'Silent SOS Mode', 'No sound — stealth alert only', settings.silentMode, onToggleSilent),
             const Divider(color: _kBorder, height: 1),
@@ -1567,7 +1581,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // SOS behaviour toggles
           _hdr('🚨 SOS Behaviour'),
           _card([
-            _tog('Voice Wake Word', 'Listen for wake word in background', _s.voiceEnabled, (v) => setState(() => _s.voiceEnabled = v)),
+            _tog('Voice Wake Word', 'Listen for wake word while the app is open', _s.voiceEnabled, (v) => setState(() => _s.voiceEnabled = v)),
             const Divider(color: _kBorder, height: 1),
             _tog('Shake to SOS', '3 strong shakes within 1.5s', _s.shakeEnabled, (v) => setState(() => _s.shakeEnabled = v)),
             const Divider(color: _kBorder, height: 1),

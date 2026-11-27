@@ -36,11 +36,15 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 
 ## ✨ Features
 
-### 🗣️ Always-On Voice Detection
+### 🗣️ Voice SOS (App Open)
 - Says **"Help me now"** or **"Bachao"** — triggers SOS instantly
-- Works in background via persistent foreground service
+- Listens while Awaaz Suraksha is open; stops listening when the app is backgrounded
 - Multilingual: English (en-IN) + Hinglish + Hindi words
 - Voice cancel: Say **"I'm safe"** to deactivate
+
+### 📳 Background Shake Detection
+- Shake the phone 3× within 1.5 seconds to trigger SOS, including while the screen is locked
+- Requires the app to remain in Recents; dismissing the app stops background detection
 
 ### 🚨 Multi-Trigger SOS
 | Trigger | How |
@@ -100,7 +104,7 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 
 ```
 lib/main.dart (single-file Flutter app)
-├── _SosBackgroundHandler     — Background mic via flutter_foreground_task
+├── _SosBackgroundHandler     — Background shake detection via flutter_foreground_task
 ├── StorageService            — SharedPreferences (contacts, settings)
 ├── TtsService                — flutter_tts (en-IN, rate 0.52)
 ├── LocationService           — geolocator (high-acc + network fallback)
