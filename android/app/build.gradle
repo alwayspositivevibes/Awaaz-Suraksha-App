@@ -26,7 +26,7 @@ android {
     defaultConfig {
         applicationId = "com.awaaz.sos"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
     }
@@ -34,6 +34,16 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.debug
+        }
+    }
+
+    flavorDimensions += "smsCapability"
+    productFlavors {
+        standard {
+            dimension "smsCapability"
+        }
+        autoSms {
+            dimension "smsCapability"
         }
     }
 

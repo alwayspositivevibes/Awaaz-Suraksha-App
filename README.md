@@ -24,7 +24,12 @@
 
 Download the APK attached to the latest **[GitHub Release](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/releases)**. If no release has an APK attached yet, the maintainer has not published one.
 
-The APK in **Actions** is a debug/testing artifact, not the recommended public release build. Before publishing, sign the APK with a private release key; never commit the keystore or its passwords to this repository.
+Two APK variants are built:
+
+- **Standard** — omits `SEND_SMS` and background-location permissions; SOS uses WhatsApp drafts or manual calls, and recurring background location texts are unavailable.
+- **Auto-SMS** — includes SMS and background-location permissions for opted-in automatic alerts and live sharing. The in-app SMS switch remains off by default. Android or Play Protect may still warn about this variant.
+
+The APKs in **Actions** are debug/testing artifacts, not recommended public release builds. Before publishing either variant, sign it with a private release key; never commit the keystore or its passwords to this repository. Sideloading itself may still prompt Android or Play Protect warnings.
 
 To install a downloaded APK on Android, allow installation for the browser or file manager that opened it. Only install APKs from a release you trust.
 
@@ -125,6 +130,7 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 | Location sharing | ✅ SMS only to user-selected contacts; no server |
 | SMS destinations | ✅ Validated in Dart and again in the Android bridge |
 | Contact storage | ⚠️ Local app storage; not encrypted at rest |
+| Reduced-permission default | ✅ Standard APK omits SMS and background-location permissions |
 | No analytics/tracking | ✅ Zero data collection |
 | Offline-first | ✅ Works with no internet |
 
@@ -176,11 +182,13 @@ lib/main.dart (Flutter app and service layer)
 flutter pub get
 flutter analyze
 flutter test
-flutter build apk --debug --target-platform android-arm64
-# APK in: build/app/outputs/flutter-apk/
+flutter build apk --debug --flavor standard --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=false
+# Standard APK: build/app/outputs/flutter-apk/app-standard-debug.apk
+flutter build apk --debug --flavor autoSms --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=true
+# Auto-SMS APK: build/app/outputs/flutter-apk/app-autoSms-debug.apk
 ```
 
-The workflow artifact is for testing. Attach a privately signed APK to **GitHub Releases** for public downloads; keep release signing keys out of Git and Actions logs.
+The workflow artifacts are for testing. Attach the chosen, privately signed APK variant to **GitHub Releases** for public downloads; keep release signing keys out of Git and Actions logs.
 
 ---
 

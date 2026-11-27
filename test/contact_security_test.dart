@@ -46,4 +46,8 @@ void main() {
   test('contact test alerts are disabled by default', () {
     expect(AppSettings().contactTestAlertsEnabled, isFalse);
   });
+
+  test('automatic SMS is disabled by default', () {
+    expect(AppSettings().smsAlertsEnabled, isFalse);
+  });
 }

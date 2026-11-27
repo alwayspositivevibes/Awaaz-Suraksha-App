@@ -22,6 +22,8 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:math' as math;
 
+const bool _autoSmsBuild = bool.fromEnvironment('AUTO_SMS_ENABLED');
+
 // ═══════════════════════════════════════════════════════════════
 //  BACKGROUND TASK  (top-level, required by flutter_foreground_task)
 // ═══════════════════════════════════════════════════════════════
@@ -97,7 +99,9 @@ class _BgHandler extends TaskHandler {
       notificationText: '$reason. Open the app to continue the alert.',
     );
 
-    if (!_demoMode && (p.getBool('sms_alerts_enabled') ?? false)) {
+    if (_autoSmsBuild &&
+        !_demoMode &&
+        (p.getBool('sms_alerts_enabled') ?? false)) {
       await p.setBool('background_sos_sms_attempted', true);
       final contacts = await StorageService.loadContacts();
       final location = await LocationService.get(requestPermission: false);
@@ -138,6 +142,12 @@ class _BgHandler extends TaskHandler {
     SharedPreferences preferences,
     int nowMillis,
   ) async {
+    if (!_autoSmsBuild) {
+      await preferences.remove('live_share_until_ms');
+      await preferences.remove('live_share_interval_ms');
+      await preferences.remove('live_share_last_update_ms');
+      return;
+    }
     final until = preferences.getInt('live_share_until_ms') ?? 0;
     if (until == 0) return;
     if (nowMillis >= until) {
@@ -320,6 +330,12 @@ class AppSettings {
 
   static Future<AppSettings> load() async {
     final p = await SharedPreferences.getInstance();
+    if (!_autoSmsBuild) {
+      await p.setBool('sms_alerts_enabled', false);
+      await p.remove('live_share_until_ms');
+      await p.remove('live_share_interval_ms');
+      await p.remove('live_share_last_update_ms');
+    }
     return AppSettings(
       wakeWord: p.getString('wake_word') ?? 'help me now',
       localeId: 'en_IN',
@@ -329,7 +345,8 @@ class AppSettings {
       silentMode: p.getBool('silent_mode') ?? false,
       shakeEnabled: p.getBool('shake_enabled') ?? true,
       demoMode: p.getBool('demo_mode') ?? false,
-      smsAlertsEnabled: p.getBool('sms_alerts_enabled') ?? false,
+      smsAlertsEnabled: _autoSmsBuild &&
+          (p.getBool('sms_alerts_enabled') ?? false),
       evidenceEnabled: p.getBool('evidence_enabled') ?? false,
       contactTestAlertsEnabled: p.getBool('contact_test_alerts_enabled') ?? false,
       shakeSensitivity: p.getDouble('shake_sensitivity') ?? 20.0,
@@ -349,7 +366,7 @@ class AppSettings {
     await p.setBool('silent_mode', silentMode);
     await p.setBool('shake_enabled', shakeEnabled);
     await p.setBool('demo_mode', demoMode);
-    await p.setBool('sms_alerts_enabled', smsAlertsEnabled);
+    await p.setBool('sms_alerts_enabled', _autoSmsBuild && smsAlertsEnabled);
     await p.setBool('evidence_enabled', evidenceEnabled);
     await p.setBool('contact_test_alerts_enabled', contactTestAlertsEnabled);
     await p.setDouble('shake_sensitivity', shakeSensitivity);
@@ -857,6 +874,7 @@ class AlertService {
     List<Contact> contacts,
     String message,
   ) async {
+    if (!_autoSmsBuild) return [];
     final sent = <String>[];
     for (final contact in contacts) {
       final phone = StorageService.validatePhone(contact.phone);
@@ -1052,7 +1070,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final p = await SharedPreferences.getInstance();
     final now = DateTime.now().millisecondsSinceEpoch;
     final checkinActive = (p.getInt('checkin_deadline_ms') ?? 0) > now;
-    final liveShareActive = (p.getInt('live_share_until_ms') ?? 0) > now;
+    final liveShareActive =
+        _autoSmsBuild && (p.getInt('live_share_until_ms') ?? 0) > now;
     if (!_settings.shakeEnabled && !checkinActive && !liveShareActive) {
       await _stopBgService();
       return;
@@ -1807,7 +1826,7 @@ class _ToolsTabState extends State<_ToolsTab> {
         widget.onCheckinExpired();
       }
     }
-    if (shareUntil > now) {
+    if (_autoSmsBuild && shareUntil > now) {
       _liveShareUntilMs = shareUntil;
       _liveShareActive = true;
       _liveShareStatus = 'Live updates are active';
@@ -1897,6 +1916,11 @@ class _ToolsTabState extends State<_ToolsTab> {
   }
 
   Future<void> _startLiveShare() async {
+    if (!_autoSmsBuild) {
+      setState(() => _liveShareStatus =
+          'Live-location SMS is available in the optional Auto-SMS APK');
+      return;
+    }
     if (widget.settings.demoMode) {
       setState(() => _liveShareStatus = 'Turn off Demo Mode before sending real SMS updates');
       return;
@@ -2175,14 +2199,17 @@ class _ToolsTabState extends State<_ToolsTab> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
-              'Text your location every ${widget.settings.liveShareIntervalMinutes} minutes for ${widget.settings.liveShareMinutes} minutes.',
+              _autoSmsBuild
+                  ? 'Text your location every ${widget.settings.liveShareIntervalMinutes} minutes for ${widget.settings.liveShareMinutes} minutes.'
+                  : 'Recurring background location texts are available only in the optional Auto-SMS APK.',
               style: const TextStyle(fontSize: 13, color: _kMuted),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Requires automatic SMS and Android “Allow all the time” location permission. Carrier charges may apply.',
-              style: TextStyle(fontSize: 11, color: _kMuted),
-            ),
+            if (_autoSmsBuild)
+              const Text(
+                'Requires automatic SMS and Android “Allow all the time” location permission. Carrier charges may apply.',
+                style: TextStyle(fontSize: 11, color: _kMuted),
+              ),
             if (_liveShareStatus.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(_liveShareStatus, style: TextStyle(
@@ -2194,9 +2221,15 @@ class _ToolsTabState extends State<_ToolsTab> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _liveShareActive ? _stopLiveShare : _startLiveShare,
+                onPressed: !_autoSmsBuild
+                    ? null
+                    : _liveShareActive ? _stopLiveShare : _startLiveShare,
                 icon: Icon(_liveShareActive ? Icons.stop_circle : Icons.location_on),
-                label: Text(_liveShareActive ? 'STOP LIVE SHARING' : 'START LIVE SHARING'),
+                label: Text(
+                  !_autoSmsBuild
+                      ? 'AVAILABLE IN AUTO-SMS APK'
+                      : _liveShareActive ? 'STOP LIVE SHARING' : 'START LIVE SHARING',
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _liveShareActive ? _kMuted : _kGreen,
                   foregroundColor: Colors.white,
@@ -2586,24 +2619,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Divider(color: _kBorder, height: 1),
             _tog('Demo Mode', 'Test SOS without sending real alerts', _s.demoMode, (v) => setState(() => _s.demoMode = v)),
             const Divider(color: _kBorder, height: 1),
-            _tog(
-              'Automatic emergency SMS',
-              'Send SOS and live-location texts to trusted contacts. Carrier charges may apply; messages are never read.',
-              _s.smsAlertsEnabled,
-              (v) async {
-                if (v) {
-                  final permission = await Permission.sms.request();
-                  if (!mounted) return;
-                  if (!permission.isGranted) {
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('SMS permission is needed for automatic alerts.')),
-                    );
-                    return;
+            if (_autoSmsBuild)
+              _tog(
+                'Automatic emergency SMS',
+                'Send SOS and live-location texts to trusted contacts. Carrier charges may apply; messages are never read.',
+                _s.smsAlertsEnabled,
+                (v) async {
+                  if (v) {
+                    final permission = await Permission.sms.request();
+                    if (!mounted) return;
+                    if (!permission.isGranted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('SMS permission is needed for automatic alerts.')),
+                      );
+                      return;
+                    }
                   }
-                }
-                setState(() => _s.smsAlertsEnabled = v);
-              },
-            ),
+                  setState(() => _s.smsAlertsEnabled = v);
+                },
+              )
+            else
+              const ListTile(
+                leading: Icon(Icons.sms_outlined, color: _kMuted),
+                title: Text('Automatic SMS not included', style: TextStyle(color: _kText)),
+                subtitle: Text(
+                  'This APK has no SEND_SMS permission. SOS uses WhatsApp drafts or manual calls; install the Auto-SMS APK for the opt-in switch.',
+                  style: TextStyle(color: _kMuted),
+                ),
+              ),
             const Divider(color: _kBorder, height: 1),
             _tog(
               'Encrypted audio evidence',
@@ -2622,7 +2665,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
 
           _hdr('📍 Live Location Share'),
-          _card([Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 10), child: Column(children: [
+          _card([Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 10), child: !_autoSmsBuild
+              ? const Text(
+                  'Recurring background location texts are available only in the optional Auto-SMS APK.',
+                  style: TextStyle(fontSize: 13, color: _kMuted),
+                )
+              : Column(children: [
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               const Text('Share for', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
               Text('${_s.liveShareMinutes} minutes', style: const TextStyle(fontSize: 13, color: _kGreen, fontWeight: FontWeight.bold)),

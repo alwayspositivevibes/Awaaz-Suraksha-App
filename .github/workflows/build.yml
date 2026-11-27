@@ -42,9 +42,15 @@ jobs:
           test -f android/app/src/main/AndroidManifest.xml
           test -f android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
           test -f android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
+          test -f android/app/build.gradle
+          test -f android/app/src/standard/AndroidManifest.xml
+          test -f android/app/src/autoSms/AndroidManifest.xml
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
           cp android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt /tmp/MainActivity.kt
           cp android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt /tmp/SosTileService.kt
+          cp android/app/build.gradle /tmp/AppBuild.gradle
+          cp android/app/src/standard/AndroidManifest.xml /tmp/StandardManifest.xml
+          cp android/app/src/autoSms/AndroidManifest.xml /tmp/AutoSmsManifest.xml
 
           # Save icons
           mkdir -p /tmp/icons
@@ -66,13 +72,19 @@ jobs:
           # Restore our AndroidManifest
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
-          # Restore the native siren MethodChannel
+          # Restore app-specific Android build files and components
           mkdir -p android/app/src/main/kotlin/com/awaaz/sos
           cp /tmp/MainActivity.kt android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
           cp /tmp/SosTileService.kt android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
+          cp /tmp/AppBuild.gradle android/app/build.gradle
+          mkdir -p android/app/src/standard android/app/src/autoSms
+          cp /tmp/StandardManifest.xml android/app/src/standard/AndroidManifest.xml
+          cp /tmp/AutoSmsManifest.xml android/app/src/autoSms/AndroidManifest.xml
           test -f android/app/src/main/AndroidManifest.xml
           test -f android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
           test -f android/app/src/main/kotlin/com/awaaz/sos/SosTileService.kt
+          test -f android/app/src/standard/AndroidManifest.xml
+          test -f android/app/src/autoSms/AndroidManifest.xml
 
           # Restore icons
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
@@ -88,35 +100,58 @@ jobs:
           test -s assets/models/vosk-model-small-en-in-0.4.zip
           test -s assets/siren.wav
 
-          # Set SDK versions
-          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 24/g' android/app/build.gradle
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle
-          grep -Eq 'minSdk(Version)?[[:space:]]*=[[:space:]]*24' android/app/build.gradle
+          # Verify versioned app Gradle configuration
+          grep -q 'minSdk = 24' android/app/build.gradle
           grep -q 'compileSdk = 36' android/app/build.gradle
           grep -q 'targetSdk = 34' android/app/build.gradle
-          sed -i '/compileOptions {/a\        coreLibraryDesugaringEnabled true' android/app/build.gradle
-          printf '\ndependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"\n}\n' >> android/app/build.gradle
-          sed -i 's/namespace = flutter[.]namespace/namespace = "com.awaaz.sos"/g' android/app/build.gradle
-          sed -i 's/namespace .*/namespace = "com.awaaz.sos"/g' android/app/build.gradle
-          sed -i 's/applicationId = "com.awaaz.awaaz_sos"/applicationId = "com.awaaz.sos"/g' android/app/build.gradle
           grep -q 'namespace = "com.awaaz.sos"' android/app/build.gradle
           grep -q 'applicationId = "com.awaaz.sos"' android/app/build.gradle
+          grep -q 'standard {' android/app/build.gradle
+          grep -q 'autoSms {' android/app/build.gradle
 
           # Set Kotlin version
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '2.1.0'/g" android/build.gradle
           grep -q 'org.jetbrains.kotlin.android" version "2.1.0"' android/settings.gradle
 
-      - name: Build debug APK
-        run: flutter build apk --debug --target-platform android-arm64
+      - name: Build standard APK without SMS permission
+        run: flutter build apk --debug --flavor standard --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=false
 
-      - name: Verify APK output
-        run: find build/app/outputs/flutter-apk -maxdepth 1 -type f -name '*.apk' -size +0c -print -quit | grep -q .
+      - name: Build optional automatic-SMS APK
+        run: flutter build apk --debug --flavor autoSms --target-platform android-arm64 --dart-define=AUTO_SMS_ENABLED=true
 
-      - name: Upload APK
+      - name: Verify APKs and SMS permissions
+        run: |
+          set -euo pipefail
+          STANDARD_APK=build/app/outputs/flutter-apk/app-standard-debug.apk
+          AUTO_SMS_APK=build/app/outputs/flutter-apk/app-autoSms-debug.apk
+          test -s "$STANDARD_APK"
+          test -s "$AUTO_SMS_APK"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$SDK_ROOT"
+          AAPT="$(find "$SDK_ROOT/build-tools" -type f -name aapt -print -quit)"
+          test -x "$AAPT"
+          "$AAPT" dump permissions "$STANDARD_APK" > /tmp/standard-permissions.txt
+          "$AAPT" dump permissions "$AUTO_SMS_APK" > /tmp/auto-sms-permissions.txt
+          if grep -Eq 'android\.permission\.(SEND_SMS|ACCESS_BACKGROUND_LOCATION|REQUEST_INSTALL_PACKAGES|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECEIVE_BOOT_COMPLETED)' /tmp/standard-permissions.txt; then
+            echo 'The standard APK unexpectedly declares an optional or unused permission.'
+            exit 1
+          fi
+          grep -q 'android.permission.SEND_SMS' /tmp/auto-sms-permissions.txt
+          grep -q 'android.permission.ACCESS_BACKGROUND_LOCATION' /tmp/auto-sms-permissions.txt
+          if grep -Eq 'android\.permission\.(REQUEST_INSTALL_PACKAGES|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECEIVE_BOOT_COMPLETED)' /tmp/auto-sms-permissions.txt; then
+            echo 'The Auto-SMS APK unexpectedly declares an unused permission.'
+            exit 1
+          fi
+
+      - name: Upload standard APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: awaaz-suraksha-debug-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          name: awaaz-suraksha-standard-debug-apk
+          path: build/app/outputs/flutter-apk/app-standard-debug.apk
+
+      - name: Upload automatic-SMS APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awaaz-suraksha-auto-sms-debug-apk
+          path: build/app/outputs/flutter-apk/app-autoSms-debug.apk
