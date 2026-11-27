@@ -61,12 +61,16 @@ class _SosBackgroundHandler extends TaskHandler {
   }
 
   bool _matchWake(String t) {
-    final r = RegExp(r'(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+help\s+me(?:\s|$)');
+    final r = RegExp(
+      r'(?:^|\s)(help\s+me\s+now|sos\s+help|bachao|बचाओ|(?:a+w+a+[sz]|a+v+a+[sz]|how\s+has|आवाज़?)\s+help\s+me)(?:\s|$)',
+    );
     return r.hasMatch(t);
   }
 
   bool _matchSafe(String t) {
-    final r = RegExp(r"(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+(i'?m|im|i\s+am)\s+safe(?:\s|$)");
+    final r = RegExp(
+      r"(?:^|\s)(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos)(?:\s|$)",
+    );
     return r.hasMatch(t);
   }
 
@@ -434,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await FlutterForegroundTask.startService(
       serviceId: 1001,
       notificationTitle: '🛡️ AWAAZ SOS Active',
-      notificationText: 'Say "Awaaz help me" at any time',
+      notificationText: 'Say "Help me now" at any time',
       callback: startCallback,
     );
     setState(() => _serviceRunning = true);
@@ -820,7 +824,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: TextStyle(fontSize: 14, color: _kText),
               children: [
                 TextSpan(text: 'Say '),
-                TextSpan(text: '"Awaaz help me"',
+                TextSpan(text: '"Help me now"',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 TextSpan(text: ' or tap SOS'),
               ],
@@ -915,7 +919,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         child: Column(children: [
           _toggleRow('Voice Wake Word Listener',
-              '"Awaaz help me" (en-IN + Hinglish)', _voiceEnabled, (v) {
+              '"Help me now" / "Bachao" (en-IN + Hinglish)', _voiceEnabled, (v) {
             setState(() => _voiceEnabled = v);
             if (v) { _startVoiceGuard(); } else { _speech.cancel(); _stopBackgroundService(); }
           }),
@@ -1276,7 +1280,7 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
         final norm = result.recognizedWords.toLowerCase();
         final safeR = RegExp(r"(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+(i'?m|im|i\s+am)\s+safe(?:\s|$)");
         if (safeR.hasMatch(norm)) {
-          _deactivate('Voice ("Awaaz I\'m safe")');
+          _deactivate('Voice ("I\'m safe")');
         }
       },
       listenFor: const Duration(seconds: 60),
@@ -1455,7 +1459,7 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
               const SizedBox(height: 20),
 
               // Voice hint
-              const Text('Say "Awaaz I\'m safe" or tap below to stop',
+              const Text('Say "I\'m safe" or tap below to stop',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold,
                       color: Colors.white70)),
               const SizedBox(height: 10),
