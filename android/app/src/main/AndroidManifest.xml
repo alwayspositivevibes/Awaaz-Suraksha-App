@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- Background Mic via Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -22,6 +23,14 @@
     <!-- Write audio evidence to storage -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+
+    <queries>
+        <package android:name="com.whatsapp"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+    </queries>
 
     <application
         android:label="Awaaz Suraksha"
@@ -55,6 +64,7 @@
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="microphone|location"
+            android:exported="false"
             android:stopWithTask="false"/>
 
         <!-- Restart service on device boot -->

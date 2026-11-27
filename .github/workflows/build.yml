@@ -2,7 +2,7 @@ name: Build Awaaz Suraksha APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'alwayspositivevibes-awaaz-suraksha-app' ]
   workflow_dispatch:
 
 jobs:
@@ -34,6 +34,7 @@ jobs:
         run: |
           # Save our custom files before flutter create wipes android/
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
+          cp android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt /tmp/MainActivity.kt
 
           # Save icons
           mkdir -p /tmp/icons
@@ -54,6 +55,10 @@ jobs:
           # Restore our AndroidManifest
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
+          # Restore the native siren MethodChannel
+          mkdir -p android/app/src/main/kotlin/com/awaaz/sos
+          cp /tmp/MainActivity.kt android/app/src/main/kotlin/com/awaaz/sos/MainActivity.kt
+
           # Restore icons
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             if [ -f "/tmp/icons/ic_launcher_${density}.png" ]; then
@@ -71,6 +76,9 @@ jobs:
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle || true
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle || true
+          sed -i 's/namespace = flutter[.]namespace/namespace = "com.awaaz.sos"/g' android/app/build.gradle || true
+          sed -i 's/namespace .*/namespace = "com.awaaz.sos"/g' android/app/build.gradle || true
+          sed -i 's/applicationId = "com.awaaz.awaaz_sos"/applicationId = "com.awaaz.sos"/g' android/app/build.gradle || true
 
           # Set Kotlin version
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle || true

@@ -185,21 +185,22 @@ class AppSettings {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SIREN SERVICE  (the REAL siren — TTS alarm + haptic storm)
+//  SIREN SERVICE  (bundled siren audio + haptic storm)
 // ═══════════════════════════════════════════════════════════════
 class SirenService {
-  final FlutterTts _tts = FlutterTts();
+  static const MethodChannel _channel = MethodChannel('com.awaaz.sos/siren');
   Timer? _hapticTimer;
-  Timer? _ttsTimer;
   bool _active = false;
 
   Future<void> start() async {
     if (_active) return;
     _active = true;
-    await _tts.setVolume(1.0);
-    await _tts.setSpeechRate(0.35);
-    await _tts.setPitch(1.4);
-    await _tts.setLanguage('en-IN');
+    try {
+      await _channel.invokeMethod('start');
+    } catch (_) {
+      _active = false;
+      return;
+    }
 
     // Haptic storm: heavy triple-pulse every 500ms
     _hapticTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
@@ -213,23 +214,13 @@ class SirenService {
       });
     });
 
-    // TTS alarm loop — this is the SIREN SOUND
-    _loop();
-  }
-
-  void _loop() {
-    if (!_active) return;
-    _tts.speak('ALERT! ALERT! EMERGENCY! S.O.S. ACTIVE!');
-    _ttsTimer = Timer(const Duration(milliseconds: 2800), () {
-      if (_active) _loop();
-    });
   }
 
   void stop() {
+    if (!_active) return;
     _active = false;
     _hapticTimer?.cancel();
-    _ttsTimer?.cancel();
-    _tts.stop();
+    _channel.invokeMethod('stop');
   }
 
   bool get isActive => _active;
@@ -370,7 +361,17 @@ class AlertService {
 
   static Future<bool> whatsapp(Contact c, String msg) async {
     final d = c.phone.replaceAll(RegExp(r'\D'), '');
-    try { return await launchUrl(Uri.parse('https://wa.me/$d?text=${Uri.encodeComponent(msg)}'), mode: LaunchMode.externalApplication); } catch (_) { return false; }
+    final text = Uri.encodeComponent(msg);
+    final direct = Uri.parse('whatsapp://send?phone=$d&text=$text');
+    final web = Uri.parse('https://wa.me/$d?text=$text');
+    try {
+      if (await canLaunchUrl(direct)) {
+        return await launchUrl(direct, mode: LaunchMode.externalApplication);
+      }
+      return await launchUrl(web, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> call(Contact c) async {
@@ -421,7 +422,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _requestPerms() async {
-    final s = await [Permission.microphone, Permission.location, Permission.locationWhenInUse].request();
+    final s = await [
+      Permission.microphone,
+      Permission.location,
+      Permission.locationWhenInUse,
+      Permission.notification,
+    ].request();
     if (mounted) setState(() {
       _micOk = s[Permission.microphone]?.isGranted ?? false;
       _gpsOk = (s[Permission.location]?.isGranted ?? false) || (s[Permission.locationWhenInUse]?.isGranted ?? false);
@@ -452,6 +458,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _onBgData(dynamic data) {
     if (data is Map && data['command'] == 'wake' && mounted) {
       _triggerSOS(source: 'Voice (Background)');
+    } else if (data is Map && data['command'] == 'safe') {
+      // The active SOS screen has its own recognizer and handles cancellation.
     }
   }
 
@@ -473,11 +481,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _startVoice() async {
     final ready = await _speech.initialize(
-      onStatus: (st) {
-        if ((st == 'done' || st == 'notListening') && mounted) {
-          Future.delayed(const Duration(milliseconds: 400), _listenLoop);
-        }
-      },
       onError: (e) {
         if (mounted) setState(() {
           _micOk = false;
@@ -487,33 +490,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     if (mounted) setState(() => _micOk = ready);
     if (ready) {
-      _listenLoop();
       await _startBgService();
       if (mounted) setState(() => _transcript = '🎙 Listening for "${_settings.wakeWord}"…');
     } else {
       if (mounted) setState(() => _transcript = '⚠ Mic unavailable — tap "Grant Mic" button');
     }
-  }
-
-  void _listenLoop() {
-    if (!_settings.voiceEnabled || !_speech.isAvailable || !mounted) return;
-    _speech.listen(
-      onResult: (r) {
-        final text = r.recognizedWords;
-        if (text.isNotEmpty && mounted) setState(() => _transcript = '🎙 Heard: $text');
-        final norm = text.toLowerCase();
-        final custom = RegExp(RegExp.escape(_settings.wakeWord.toLowerCase()));
-        final builtIn = RegExp(r'(help\s+me\s+now|bachao|बचाओ|help\s+me|emergency\s+sos)');
-        if (custom.hasMatch(norm) || builtIn.hasMatch(norm)) {
-          _triggerSOS(source: 'Voice Trigger');
-        }
-      },
-      listenFor: const Duration(seconds: 60),
-      pauseFor: const Duration(seconds: 2),
-      localeId: _settings.localeId,
-      cancelOnError: false,
-      partialResults: true,
-    );
   }
 
   void _startShake() {
@@ -540,6 +521,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     HapticFeedback.heavyImpact();
     _tts.setMuted(forceSilent || _settings.silentMode);
     StorageService.addLog('SOS triggered: $source');
+    _speech.cancel();
+    _stopBgService();
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => SosActiveScreen(
         contacts: List.from(_contacts),
@@ -550,7 +533,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         tts: _tts,
         onDeactivated: () {
           _tts.setMuted(false);
-          if (_settings.voiceEnabled && mounted) _listenLoop();
+          if (_settings.voiceEnabled && mounted) _startVoice();
         },
       ),
       fullscreenDialog: true,
@@ -590,7 +573,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      if (_settings.voiceEnabled) _listenLoop();
+      if (_settings.voiceEnabled) _startVoice();
       WakelockPlus.enable();
       AppSettings.load().then((s) { if (mounted) setState(() => _settings = s); });
       StorageService.loadContacts().then((c) { if (mounted) setState(() => _contacts = c); });

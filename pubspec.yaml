@@ -52,3 +52,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/app_logo.png
+    - assets/siren.wav
