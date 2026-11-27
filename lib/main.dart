@@ -723,15 +723,16 @@ class AlertService {
       return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW!\n\n📍 Location$acc:\n$url\n\n⏰ $ts\n\n📞 Emergency: 112 | Women: 181 | Police: 100';
     }
 
-    static String buildSmsMsg(Map<String, dynamic> loc) {
-      final time = DateTime.now().toString().substring(0, 16);
-      if (loc['ok'] == true) {
-        final url = LocationService.mapsUrl(loc['lat'], loc['lng']);
-        return 'SOS from Awaaz Suraksha. I need help. Location: $url Call 112. $time';
-      }
-      return 'SOS from Awaaz Suraksha. I need help. Location unavailable. Call me now or dial 112. $time';
-    }
     return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW!\n📍 Location unavailable — call them NOW!\n\n⏰ $ts\n\n📞 Emergency: 112 | Women: 181 | Police: 100';
+  }
+
+  static String buildSmsMsg(Map<String, dynamic> loc) {
+    final time = DateTime.now().toString().substring(0, 16);
+    if (loc['ok'] == true) {
+      final url = LocationService.mapsUrl(loc['lat'], loc['lng']);
+      return 'SOS from Awaaz Suraksha. I need help. Location: $url Call 112. $time';
+    }
+    return 'SOS from Awaaz Suraksha. I need help. Location unavailable. Call me now or dial 112. $time';
   }
 
   static Future<bool> whatsapp(Contact c, String msg) async {
