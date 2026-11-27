@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -7,7 +8,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as notifications;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:vosk_flutter/vosk_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:record/record.dart';
@@ -184,7 +185,7 @@ class AppSettings {
   AppSettings({
     this.wakeWord = 'help me now',
     this.localeId = 'en_IN',
-    this.languageLabel = 'English (en-IN)',
+    this.languageLabel = 'English (India; offline)',
     this.voiceEnabled = true,
     this.sirenEnabled = true,
     this.silentMode = false,
@@ -198,8 +199,8 @@ class AppSettings {
     final p = await SharedPreferences.getInstance();
     return AppSettings(
       wakeWord: p.getString('wake_word') ?? 'help me now',
-      localeId: p.getString('locale_id') ?? 'en_IN',
-      languageLabel: p.getString('language_label') ?? 'English (en-IN)',
+      localeId: 'en_IN',
+      languageLabel: 'English (India; offline)',
       voiceEnabled: p.getBool('voice_enabled') ?? true,
       sirenEnabled: p.getBool('siren_enabled') ?? true,
       silentMode: p.getBool('silent_mode') ?? false,
@@ -230,6 +231,115 @@ class AppSettings {
     shakeEnabled: shakeEnabled, demoMode: demoMode, shakeSensitivity: shakeSensitivity,
     checkinMinutes: checkinMinutes,
   );
+}
+
+class VoiceCommandService {
+  static const _modelAsset = 'assets/models/vosk-model-small-en-in-0.4.zip';
+  static const _sampleRate = 16000;
+
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
+  final ModelLoader _modelLoader = ModelLoader();
+  Model? _model;
+  Recognizer? _recognizer;
+  SpeechService? _speechService;
+  StreamSubscription<String>? _resultSubscription;
+  StreamSubscription<String>? _partialSubscription;
+  bool _active = false;
+  bool _starting = false;
+  bool _stopping = false;
+  bool _shouldRun = false;
+
+  Future<void> start({
+    required ValueChanged<String> onRecognized,
+    required ValueChanged<Object> onError,
+  }) async {
+    _shouldRun = true;
+    while (_stopping) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    if (_active || _starting) return;
+    _starting = true;
+    try {
+      if (_model == null) {
+        final modelPath = await _modelLoader.loadFromAssets(_modelAsset);
+        _model = await _vosk.createModel(modelPath);
+      }
+      if (_recognizer == null) {
+        _recognizer = await _vosk.createRecognizer(
+          model: _model!,
+          sampleRate: _sampleRate,
+        );
+      }
+      if (_speechService == null) {
+        _speechService = await _vosk.initSpeechService(_recognizer!);
+      }
+      if (!_shouldRun) return;
+
+      final service = _speechService!;
+      _resultSubscription = service.onResult().listen(
+        (result) => onRecognized(_extractText(result, 'text')),
+        onError: (Object error) => onError(error),
+      );
+      _partialSubscription = service.onPartial().listen(
+        (result) => onRecognized(_extractText(result, 'partial')),
+        onError: (Object error) => onError(error),
+      );
+      final started = await service.start(onRecognitionError: onError);
+      if (!_shouldRun) {
+        await service.stop();
+        return;
+      }
+      if (started != true) {
+        throw StateError('Offline voice recognition did not start.');
+      }
+      _active = true;
+    } catch (_) {
+      await _resultSubscription?.cancel();
+      await _partialSubscription?.cancel();
+      _resultSubscription = null;
+      _partialSubscription = null;
+      rethrow;
+    } finally {
+      _starting = false;
+    }
+  }
+
+  String _extractText(String result, String key) {
+    final decoded = jsonDecode(result);
+    if (decoded is Map<String, dynamic>) {
+      return decoded[key]?.toString() ?? '';
+    }
+    return '';
+  }
+
+  Future<void> stop() async {
+    _shouldRun = false;
+    while (_stopping) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    while (_starting) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    if (_shouldRun) return;
+    if (_speechService == null) return;
+    _stopping = true;
+    final service = _speechService!;
+    try {
+      _active = false;
+      try {
+        await service.stop();
+      } finally {
+        await service.dispose();
+      }
+    } finally {
+      _speechService = null;
+      await _resultSubscription?.cancel();
+      await _partialSubscription?.cancel();
+      _resultSubscription = null;
+      _partialSubscription = null;
+      _stopping = false;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -446,10 +556,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _loading = true;
   bool _sosActive = false;
   bool _handlingPendingSos = false;
-  Timer? _voiceRestartTimer;
 
   final TtsService _tts = TtsService();
-  SpeechToText _speech = SpeechToText();
+  final VoiceCommandService _voice = VoiceCommandService();
 
   @override
   void initState() {
@@ -518,7 +627,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final p = await SharedPreferences.getInstance();
       if (!(p.getBool('pending_background_sos') ?? false)) return;
       await p.remove('pending_background_sos');
-      if (mounted) _triggerSOS(source: 'Shake to SOS');
+      if (mounted) await _triggerSOS(source: 'Shake to SOS');
     } finally {
       _handlingPendingSos = false;
     }
@@ -555,79 +664,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startVoice() async {
-    final ready = await _speech.initialize(
-      onStatus: (status) {
-        if ((status == 'done' || status == 'notListening') &&
-            !_sosActive &&
-            _settings.voiceEnabled &&
-            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-          _scheduleVoiceRestart();
-        }
-      },
-      onError: (e) {
-        if (mounted) setState(() {
-          _micOk = false;
-          _transcript = 'Mic error — tap "Grant Mic" to fix';
-        });
-      },
-    );
-    if (mounted) setState(() => _micOk = ready);
-    if (ready && !_sosActive) {
-      _listenLoop();
-      if (mounted) setState(() => _transcript = '🎙 Listening for "${_settings.wakeWord}"…');
-    } else {
-      if (mounted) setState(() => _transcript = '⚠ Mic unavailable — tap "Grant Mic" button');
-    }
-  }
-
-  void _listenLoop() {
     if (!_settings.voiceEnabled ||
         _sosActive ||
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
-        !_speech.isAvailable ||
-        _speech.isListening) {
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
       return;
     }
-    _speech.listen(
-      onResult: (result) {
-        final text = result.recognizedWords;
-        if (text.isNotEmpty && mounted) {
-          setState(() => _transcript = '🎙 Heard: $text');
-        }
-        final normalized = text.toLowerCase();
-        final custom = RegExp(RegExp.escape(_settings.wakeWord.toLowerCase()));
-        final builtIn = RegExp(r'(help\s+me\s+now|bachao|बचाओ|help\s+me|emergency\s+sos)');
-        if (custom.hasMatch(normalized) || builtIn.hasMatch(normalized)) {
-          _triggerSOS(source: 'Voice Trigger');
-        }
-      },
-      listenFor: const Duration(minutes: 5),
-      pauseFor: const Duration(minutes: 5),
-      localeId: _settings.localeId,
-      cancelOnError: false,
-      partialResults: true,
-    );
+    try {
+      await _voice.start(
+        onRecognized: _handleVoiceText,
+        onError: (error) {
+          if (mounted) setState(() {
+            _micOk = false;
+            _transcript = 'Voice recognition error: $error';
+          });
+        },
+      );
+      if (mounted) setState(() {
+        _micOk = true;
+        _transcript = '🎙 Listening for "${_settings.wakeWord}"…';
+      });
+    } on MicrophoneAccessDeniedException {
+      if (mounted) setState(() {
+        _micOk = false;
+        _transcript = 'Mic permission denied — tap "Grant Mic"';
+      });
+    } on PlatformException catch (error) {
+      if (mounted) setState(() {
+        _micOk = false;
+        _transcript = 'Mic error: ${error.message ?? error.code}';
+      });
+    } on Exception catch (error) {
+      if (mounted) setState(() {
+        _micOk = false;
+        _transcript = 'Voice setup failed: $error';
+      });
+    }
   }
 
-  void _scheduleVoiceRestart() {
-    if (_voiceRestartTimer?.isActive == true) return;
-    _voiceRestartTimer = Timer(const Duration(milliseconds: 500), () {
-      _voiceRestartTimer = null;
-      _listenLoop();
-    });
+  void _handleVoiceText(String text) {
+    if (!mounted ||
+        _sosActive ||
+        !_settings.voiceEnabled ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+        text.trim().isEmpty) {
+      return;
+    }
+    setState(() => _transcript = '🎙 Heard: $text');
+    final normalized = text.toLowerCase();
+    final custom = RegExp(RegExp.escape(_settings.wakeWord.toLowerCase()));
+    final builtIn = RegExp(r'(help\s+me\s+now|bachao|बचाओ|help\s+me|emergency)');
+    if (custom.hasMatch(normalized) || builtIn.hasMatch(normalized)) {
+      unawaited(_triggerSOS(source: 'Voice Trigger'));
+    }
   }
 
-  void _triggerSOS({required String source, bool forceSilent = false}) {
+  Future<void> _triggerSOS({required String source, bool forceSilent = false}) async {
     if (!mounted) return;
     if (_sosActive) return;
     _sosActive = true;
     HapticFeedback.heavyImpact();
     _tts.setMuted(forceSilent || _settings.silentMode);
     StorageService.addLog('SOS triggered: $source');
-    _voiceRestartTimer?.cancel();
-    _voiceRestartTimer = null;
-    _speech.cancel();
-    Navigator.of(context).push(MaterialPageRoute(
+    await _voice.stop();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => SosActiveScreen(
         contacts: List.from(_contacts),
         isDemo: _settings.demoMode,
@@ -635,6 +735,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         sirenEnabled: _settings.sirenEnabled && !(forceSilent || _settings.silentMode),
         source: source,
         tts: _tts,
+        voice: _voice,
         onDeactivated: () {
           _sosActive = false;
           _tts.setMuted(false);
@@ -671,7 +772,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final c = await StorageService.loadContacts();
     if (!mounted) return;
     setState(() { _settings = s; _contacts = c; });
-    await _speech.cancel();
+    await _voice.stop();
     if (_settings.voiceEnabled) await _startVoice();
     await _syncShakeService(restart: true);
   }
@@ -685,17 +786,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       StorageService.loadContacts().then((c) { if (mounted) setState(() => _contacts = c); });
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      _voiceRestartTimer?.cancel();
-      _voiceRestartTimer = null;
-      _speech.cancel();
+      unawaited(_voice.stop());
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _voiceRestartTimer?.cancel();
-    _speech.cancel();
+    unawaited(_voice.stop());
     FlutterForegroundTask.removeTaskDataCallback(_onBgData);
     super.dispose();
   }
@@ -723,12 +821,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _SosTab(
         micOk: _micOk, gpsOk: _gpsOk, transcript: _transcript,
         settings: _settings, contacts: _contacts, serviceRunning: _serviceRunning,
-        onSOS: () => _triggerSOS(source: 'SOS Button'),
-        onDemoSOS: () => _triggerSOS(source: 'Test SOS (Demo)'),
+        onSOS: () => unawaited(_triggerSOS(source: 'SOS Button')),
+        onDemoSOS: () => unawaited(_triggerSOS(source: 'Test SOS (Demo)')),
         onGrantMic: _grantMic, onGrantGps: _grantGps,
         onToggleVoice: (v) async {
           _settings.voiceEnabled = v; await _settings.save(); setState(() {});
-          if (v) { await _startVoice(); } else { await _speech.cancel(); }
+          if (v) { await _startVoice(); } else { await _voice.stop(); }
         },
         onToggleSilent: (v) async { _settings.silentMode = v; await _settings.save(); setState(() {}); },
         onToggleSiren: (v) async { _settings.sirenEnabled = v; await _settings.save(); setState(() {}); },
@@ -744,7 +842,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         settings: _settings,
         onFakeCall: (name) => Navigator.push(context, MaterialPageRoute(
             builder: (_) => FakeCallScreen(callerName: name), fullscreenDialog: true)),
-        onCheckinExpired: () => _triggerSOS(source: 'Check-in Timer Expired'),
+        onCheckinExpired: () => unawaited(_triggerSOS(source: 'Check-in Timer Expired')),
       ),
       _ContactsTab(
         contacts: _contacts,
@@ -763,7 +861,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           elevation: 0,
           titleSpacing: 14,
           title: GestureDetector(
-            onLongPress: () => _triggerSOS(source: 'Long-press logo', forceSilent: true),
+            onLongPress: () => unawaited(_triggerSOS(source: 'Long-press logo', forceSilent: true)),
             child: Row(children: [
               const Icon(Icons.shield, color: _kRed, size: 24),
               const SizedBox(width: 8),
@@ -979,7 +1077,7 @@ class _SosTab extends StatelessWidget {
             _iRow('👆', 'Tap the big red SOS button'),
             _iRow('🤫', 'Hold shield logo (top-left) 3s → Silent SOS, no sound'),
             _iRow('🔊', 'Siren = loud "ALERT!" voice + triple vibration pulses'),
-            _iRow('⚙️', 'Tap ⚙ (top-right) to change wake word, language & more'),
+            _iRow('⚙️', 'Tap ⚙ (top-right) to change the wake phrase & safety settings'),
           ]),
         ),
         const SizedBox(height: 20),
@@ -1576,18 +1674,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _wakeCtrl;
 
   final _languages = {
-    'English (en-IN)': 'en_IN',
-    'Hindi (hi-IN)': 'hi_IN',
-    'Kannada (kn-IN)': 'kn_IN',
-    'Tamil (ta-IN)': 'ta_IN',
-    'Telugu (te-IN)': 'te_IN',
-    'Marathi (mr-IN)': 'mr_IN',
+    'English (India; offline)': 'en_IN',
   };
 
   @override
   void initState() {
     super.initState();
     _s = widget.settings.copy();
+    _s.languageLabel = 'English (India; offline)';
+    _s.localeId = 'en_IN';
     _wakeCtrl = TextEditingController(text: _s.wakeWord);
   }
 
@@ -1647,9 +1742,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Language
           _hdr('🌏 Voice Language'),
           _card([Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Speech Recognition Language', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
+            const Text('Offline Speech Model', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
             const SizedBox(height: 4),
-            const Text('Changes the language for voice guard recognition', style: TextStyle(fontSize: 12, color: _kMuted)),
+            const Text('Uses an Indian-English model locally. Hindi words such as “Bachao” may be less reliable.', style: TextStyle(fontSize: 12, color: _kMuted)),
             const SizedBox(height: 10),
             ..._languages.entries.map((e) => RadioListTile<String>(
               value: e.key, groupValue: _s.languageLabel,
@@ -1786,12 +1881,14 @@ class SosActiveScreen extends StatefulWidget {
   final bool isDemo, isSilent, sirenEnabled;
   final String source;
   final TtsService tts;
+  final VoiceCommandService voice;
   final VoidCallback onDeactivated;
 
   const SosActiveScreen({
     super.key,
     required this.contacts, required this.isDemo, required this.isSilent,
-    required this.sirenEnabled, required this.source, required this.tts, required this.onDeactivated,
+    required this.sirenEnabled, required this.source, required this.tts,
+    required this.voice, required this.onDeactivated,
   });
 
   @override State<SosActiveScreen> createState() => _SosActiveState();
@@ -1811,7 +1908,6 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
 
   final RecordingService _rec = RecordingService();
   final SirenService _siren = SirenService();
-  SpeechToText _speech = SpeechToText();
   Timer? _recTimer;
   Duration _recElapsed = Duration.zero;
 
@@ -1903,31 +1999,21 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
   }
 
   void _startVoiceCancel() async {
-    final rec = SpeechToText();
-    await rec.initialize();
-    _speech = rec;
-    _listenSafe();
-  }
-
-  void _listenSafe() {
-    if (_cancelled) return;
-    _speech.listen(
-      onResult: (r) {
-        if (RegExp(r"(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos|safe\s+now|im\s+safe)").hasMatch(r.recognizedWords.toLowerCase())) {
-          _deactivate('Voice: "I\'m safe"');
-        }
-      },
-      listenFor: const Duration(minutes: 5),
-      pauseFor: const Duration(minutes: 5),
-      localeId: 'en_IN',
-      cancelOnError: false,
-      partialResults: true,
-    );
-    _speech.statusListener = (st) {
-      if ((st == 'done' || st == 'notListening') && !_cancelled) {
-        Future.delayed(const Duration(milliseconds: 400), _listenSafe);
-      }
-    };
+    try {
+      await widget.voice.start(
+        onRecognized: (text) {
+          if (RegExp(r"(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos|safe\s+now|im\s+safe)")
+              .hasMatch(text.toLowerCase())) {
+            unawaited(_deactivate('Voice: "I\'m safe"'));
+          }
+        },
+        onError: (error) {
+          if (mounted) setState(() => _alertStatus = 'Voice recognition error: $error');
+        },
+      );
+    } on Exception catch (error) {
+      if (mounted) setState(() => _alertStatus = 'Voice cancellation unavailable: $error');
+    }
   }
 
   Future<void> _deactivate(String reason) async {
@@ -1936,7 +2022,7 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
     _siren.stop();
     _cdTimer?.cancel();
     _recTimer?.cancel();
-    await _speech.cancel();
+    await widget.voice.stop();
     await widget.tts.stop();
 
     if (_dispatched) {
@@ -1962,7 +2048,8 @@ class _SosActiveState extends State<SosActiveScreen> with TickerProviderStateMix
   @override
   void dispose() {
     _cdTimer?.cancel(); _recTimer?.cancel(); _siren.stop();
-    _pulseCtrl.dispose(); _bgCtrl.dispose(); _speech.cancel();
+    _pulseCtrl.dispose(); _bgCtrl.dispose();
+    if (!_cancelled) unawaited(widget.voice.stop());
     WakelockPlus.disable();
     super.dispose();
   }

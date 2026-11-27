@@ -39,8 +39,10 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 ### 🗣️ Voice SOS (App Open)
 - Says **"Help me now"** or **"Bachao"** — triggers SOS instantly
 - Listens while Awaaz Suraksha is open; stops listening when the app is backgrounded
-- Multilingual: English (en-IN) + Hinglish + Hindi words
+- Uses an offline Indian-English Vosk model, so Android speech-service tones are not used
+- Hindi wake words may be less reliable than English; the model is about 38 MB
 - Voice cancel: Say **"I'm safe"** to deactivate
+- Model: [Vosk small Indian-English 0.4](https://alphacephei.com/vosk/models), Apache-2.0
 
 ### 📳 Background Shake Detection
 - Shake the phone 3× within 1.5 seconds to trigger SOS, including while the screen is locked

@@ -10,8 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Voice Recognition
-  speech_to_text: ^6.6.2
+  # Offline voice recognition without Android speech-service tones
+  vosk_flutter: ^0.3.48
 
   # Text to Speech
   flutter_tts: ^4.0.2
@@ -54,3 +54,4 @@ flutter:
   assets:
     - assets/app_logo.png
     - assets/siren.wav
+    - assets/models/vosk-model-small-en-in-0.4.zip
