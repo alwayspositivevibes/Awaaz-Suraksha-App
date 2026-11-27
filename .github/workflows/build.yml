@@ -135,6 +135,7 @@ jobs:
       - name: Verify APKs and SMS permissions
         run: |
           set -euo pipefail
+          set -x
           STANDARD_APK=build/app/outputs/flutter-apk/app-standard-debug.apk
           AUTO_SMS_APK=build/app/outputs/flutter-apk/app-autoSms-debug.apk
           test -s "$STANDARD_APK"
@@ -151,8 +152,12 @@ jobs:
               exit 1
             fi
           done
-          grep -q 'android.permission.SEND_SMS' /tmp/auto-sms-permissions.txt
-          grep -q 'android.permission.ACCESS_BACKGROUND_LOCATION' /tmp/auto-sms-permissions.txt
+          for permission in SEND_SMS ACCESS_BACKGROUND_LOCATION; do
+            if ! grep -Fq "android.permission.$permission" /tmp/auto-sms-permissions.txt; then
+              echo "The Auto-SMS APK is missing android.permission.$permission."
+              exit 1
+            fi
+          done
           for permission in REQUEST_INSTALL_PACKAGES READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE RECEIVE_BOOT_COMPLETED; do
             if grep -Fq "android.permission.$permission" /tmp/auto-sms-permissions.txt; then
               echo "The Auto-SMS APK unexpectedly declares android.permission.$permission."
