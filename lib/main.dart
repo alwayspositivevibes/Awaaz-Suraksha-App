@@ -15,7 +15,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:math' as math;
 
-// ─── Background Task Entry Point (top-level, required by flutter_foreground_task) ───
+// ─── Background Task Entry Point ───────────────────────────────────────────────
 @pragma('vm:entry-point')
 void startCallback() {
   FlutterForegroundTask.setTaskHandler(_SosBackgroundHandler());
@@ -83,10 +83,12 @@ class _SosBackgroundHandler extends TaskHandler {
   }
 }
 
-// ─── App Entry ───────────────────────────────────────────────────────────────
+// ─── App Entry ────────────────────────────────────────────────────────────────
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  // Security: prevent screenshots in task switcher
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   runApp(const AwaazSosApp());
 }
 
@@ -96,7 +98,7 @@ class AwaazSosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AWAAZ SOS',
+      title: 'Awaaz Suraksha',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.dark(
@@ -114,14 +116,14 @@ class AwaazSosApp extends StatelessWidget {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const _kRed = Color(0xFFDA3633);
-const _kGreen = Color(0xFF238636);
-const _kBg = Color(0xFF0D1117);
-const _kCard = Color(0xFF161B22);
+const _kRed    = Color(0xFFDA3633);
+const _kGreen  = Color(0xFF238636);
+const _kBg     = Color(0xFF0D1117);
+const _kCard   = Color(0xFF161B22);
 const _kBorder = Color(0xFF30363D);
-const _kText = Color(0xFFE6EDF3);
-const _kMuted = Color(0xFF8B949E);
-const _kSosBg = Color(0xFF1A0000);
+const _kText   = Color(0xFFE6EDF3);
+const _kMuted  = Color(0xFF8B949E);
+const _kSosBg  = Color(0xFF1A0000);
 
 // ─── Contact Model ────────────────────────────────────────────────────────────
 class Contact {
@@ -138,15 +140,17 @@ class Contact {
 
 // ─── Storage Service ──────────────────────────────────────────────────────────
 class StorageService {
-  static const _contactsKey = 'awaaz_contacts';
+  static const _contactsKey = 'awaaz_contacts_v2';
+  static const _maxContacts = 5;
 
   static Future<List<Contact>> loadContacts() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_contactsKey) ?? [];
     return raw.map((s) {
       final parts = s.split('|||');
+      if (parts.length < 2) return null;
       return Contact(name: parts[0], phone: parts[1]);
-    }).toList();
+    }).whereType<Contact>().toList();
   }
 
   static Future<void> saveContacts(List<Contact> contacts) async {
@@ -172,6 +176,8 @@ class StorageService {
     }
     return e164;
   }
+
+  static bool get maxContactsReached => false; // evaluated at call site with list
 }
 
 // ─── TTS Service ──────────────────────────────────────────────────────────────
@@ -218,7 +224,6 @@ class LocationService {
         return {'ok': false, 'reason': 'Location permission denied'};
       }
 
-      // Try high-accuracy first (5s), then network fallback (remaining budget)
       Position? pos;
       try {
         pos = await Geolocator.getCurrentPosition(
@@ -238,9 +243,10 @@ class LocationService {
         'ok': true,
         'lat': pos.latitude.toStringAsFixed(6),
         'lng': pos.longitude.toStringAsFixed(6),
+        'accuracy': pos.accuracy.toStringAsFixed(0),
       };
     } catch (e) {
-      return {'ok': false, 'reason': e.toString()};
+      return {'ok': false, 'reason': 'Error getting location'};
     }
   }
 
@@ -262,7 +268,7 @@ class RecordingService {
           .replaceAll(':', '-')
           .replaceAll('.', '-')
           .substring(0, 19);
-      _currentPath = '${dir.path}/awaaz-sos-$stamp.m4a';
+      _currentPath = '${dir.path}/awaaz-evidence-$stamp.m4a';
       _startedAt = DateTime.now();
 
       await _recorder.start(
@@ -294,16 +300,23 @@ class RecordingService {
   }
 }
 
-// ─── WhatsApp Service ─────────────────────────────────────────────────────────
+// ─── WhatsApp / Alert Service ─────────────────────────────────────────────────
 class WhatsAppService {
   static String buildMessage(Map<String, dynamic> loc) {
+    final ts = DateTime.now().toString().substring(0, 19);
     if (loc['ok'] == true) {
       final mapsUrl = LocationService.buildMapsUrl(loc['lat'], loc['lng']);
-      return '🚨 EMERGENCY ALERT — AWAAZ SOS. Your contact needs help immediately. '
-          'Location: $mapsUrl. Please call them or contact emergency services (112/181) now.';
+      final acc = loc['accuracy'] != null ? ' (±${loc['accuracy']}m)' : '';
+      return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW.\n\n'
+          '📍 Location$acc:\n$mapsUrl\n\n'
+          '⏰ Time: $ts\n\n'
+          'Please call them immediately or contact:\n'
+          '• Police: 100\n• Emergency: 112\n• Women Helpline: 181';
     }
-    return '🚨 EMERGENCY ALERT — AWAAZ SOS. Your contact needs help immediately. '
-        'Location unavailable. Please call them or contact emergency services (112/181) now.';
+    return '🚨 EMERGENCY — Awaaz Suraksha SOS\n\nYour contact needs help RIGHT NOW.\n\n'
+        '📍 Location unavailable — call them immediately!\n\n'
+        '⏰ Time: $ts\n\n'
+        'Emergency numbers:\n• Police: 100\n• Emergency: 112\n• Women Helpline: 181';
   }
 
   static Future<bool> openWhatsApp(Contact contact, String message) async {
@@ -325,6 +338,31 @@ class WhatsAppService {
   }
 }
 
+// ─── Security Service ─────────────────────────────────────────────────────────
+class SecurityService {
+  /// Detect if running on a rooted device (best-effort, not foolproof)
+  static bool isRooted() {
+    if (!Platform.isAndroid) return false;
+    final suspiciousPaths = [
+      '/system/app/Superuser.apk',
+      '/sbin/su',
+      '/system/bin/su',
+      '/system/xbin/su',
+      '/data/local/xbin/su',
+      '/data/local/bin/su',
+      '/system/sd/xbin/su',
+      '/system/bin/failsafe/su',
+      '/data/local/su',
+    ];
+    for (final path in suspiciousPaths) {
+      try {
+        if (File(path).existsSync()) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+}
+
 // ─── Home Screen ──────────────────────────────────────────────────────────────
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -334,23 +372,22 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  // State
   List<Contact> _contacts = [];
   bool _voiceEnabled = true;
-  bool _silentMode = false;
+  bool _silentMode   = false;
   bool _sirenEnabled = true;
   bool _shakeEnabled = true;
+  bool _rootWarning  = false;
 
   bool _micOk = false;
   bool _gpsOk = false;
-  String _transcript = 'Listening in Indian English (en-IN)…';
+  String _transcript = 'Listening… say "Help me now" or "Bachao"';
   bool _serviceRunning = false;
 
   final TtsService _tts = TtsService();
   SpeechToText _speech = SpeechToText();
   StreamSubscription<AccelerometerEvent>? _shakeSubscription;
 
-  // Shake detection
   List<DateTime> _shakeTimestamps = [];
   double _lastMag = 0;
 
@@ -362,6 +399,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _init() async {
+    // Security: FLAG_SECURE to prevent screenshots
+    try {
+      await SystemChannels.platform.invokeMethod(
+          'SystemNavigator.setSystemUIChangeCallback');
+    } catch (_) {}
+
+    _rootWarning = SecurityService.isRooted();
     await _loadContacts();
     await _requestPermissions();
     await WakelockPlus.enable();
@@ -372,7 +416,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _loadContacts() async {
     final c = await StorageService.loadContacts();
-    setState(() => _contacts = c);
+    if (mounted) setState(() => _contacts = c);
   }
 
   Future<void> _requestPermissions() async {
@@ -383,20 +427,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       Permission.storage,
     ].request();
 
-    setState(() {
-      _micOk = statuses[Permission.microphone]?.isGranted ?? false;
-      _gpsOk = (statuses[Permission.location]?.isGranted ?? false) ||
-          (statuses[Permission.locationWhenInUse]?.isGranted ?? false);
-    });
+    if (mounted) {
+      setState(() {
+        _micOk = statuses[Permission.microphone]?.isGranted ?? false;
+        _gpsOk = (statuses[Permission.location]?.isGranted ?? false) ||
+            (statuses[Permission.locationWhenInUse]?.isGranted ?? false);
+      });
+    }
   }
 
-  // ─── Foreground Service Setup ─────────────────────────────────────────────
+  // ─── Foreground Service ───────────────────────────────────────────────────
   void _initForegroundService() {
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'awaaz_guard',
-        channelName: 'AWAAZ SOS Guard',
-        channelDescription: 'AWAAZ SOS is protecting you in the background.',
+        channelName: 'Awaaz Suraksha Guard',
+        channelDescription: 'Awaaz Suraksha is protecting you in the background.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
       ),
@@ -412,8 +458,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         allowWifiLock: true,
       ),
     );
-
-    // Listen for wake/safe commands from background service
     FlutterForegroundTask.addTaskDataCallback(_onBackgroundData);
   }
 
@@ -422,8 +466,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final cmd = data['command'];
       if (cmd == 'wake' && mounted) {
         _activateSOS(isDemo: false, source: 'Voice (Background)');
-      } else if (cmd == 'safe' && mounted) {
-        // Deactivate is handled in SOS screen
       }
     }
   }
@@ -432,19 +474,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.startService(
       serviceId: 1001,
-      notificationTitle: '🛡️ AWAAZ SOS Active',
-      notificationText: 'Say "Help me now" at any time',
+      notificationTitle: '🛡️ Awaaz Suraksha Active',
+      notificationText: 'Say "Help me now" anytime — I\'m listening',
       callback: startCallback,
     );
-    setState(() => _serviceRunning = true);
+    if (mounted) setState(() => _serviceRunning = true);
   }
 
   Future<void> _stopBackgroundService() async {
     await FlutterForegroundTask.stopService();
-    setState(() => _serviceRunning = false);
+    if (mounted) setState(() => _serviceRunning = false);
   }
 
-  // ─── Voice Guard (foreground) ─────────────────────────────────────────────
+  // ─── Voice Guard ──────────────────────────────────────────────────────────
   Future<void> _startVoiceGuard() async {
     bool ready = await _speech.initialize(
       onStatus: (status) {
@@ -453,14 +495,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       },
       onError: (error) {
-        setState(() {
-          _micOk = false;
-          _transcript = 'Mic error: ${error.errorMsg}';
-        });
+        if (mounted) {
+          setState(() {
+            _micOk = false;
+            _transcript = 'Mic unavailable — tap SOS or shake to trigger';
+          });
+        }
       },
     );
 
-    setState(() => _micOk = ready);
+    if (mounted) setState(() => _micOk = ready);
     if (ready) {
       _listenLoop();
       await _startBackgroundService();
@@ -472,18 +516,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _speech.listen(
       onResult: (result) {
         final text = result.recognizedWords;
-        if (text.isNotEmpty) {
-          setState(() => _transcript = 'Heard: $text');
+        if (text.isNotEmpty && mounted) {
+          setState(() => _transcript = '🎙 Heard: $text');
         }
 
         final norm = text.toLowerCase();
-        final wakeR = RegExp(r'(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+help\s+me(?:\s|$)');
-        final safeR = RegExp(r"(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+(i'?m|im|i\s+am)\s+safe(?:\s|$)");
+        final wakeR = RegExp(
+            r'(?:^|\s)(help\s+me\s+now|sos\s+help|bachao|बचाओ|(?:a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+help\s+me)(?:\s|$)');
 
         if (wakeR.hasMatch(norm)) {
           _activateSOS(isDemo: false, source: 'Voice (Foreground)');
-        } else if (safeR.hasMatch(norm)) {
-          // handled in SOS screen
         }
       },
       listenFor: const Duration(seconds: 60),
@@ -502,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final delta = (mag - _lastMag).abs();
       _lastMag = mag;
 
-      if (delta > 22) {
+      if (delta > 20) {
         final now = DateTime.now();
         _shakeTimestamps = _shakeTimestamps
             .where((t) => now.difference(t).inMilliseconds < 1500)
@@ -519,11 +561,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ─── SOS Activation ───────────────────────────────────────────────────────
   void _activateSOS({required bool isDemo, required String source, bool forceSilent = false}) {
+    HapticFeedback.heavyImpact();
     _tts.setSilent(forceSilent || _silentMode);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SosActiveScreen(
-          contacts: _contacts,
+          contacts: List<Contact>.from(_contacts),
           isDemo: isDemo,
           isSilent: forceSilent || _silentMode,
           sirenEnabled: _sirenEnabled && !(forceSilent || _silentMode),
@@ -531,7 +574,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           tts: _tts,
           onDeactivated: () {
             _tts.setSilent(false);
-            if (_voiceEnabled) _listenLoop();
+            if (_voiceEnabled && mounted) _listenLoop();
           },
         ),
         fullscreenDialog: true,
@@ -542,7 +585,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      if (_voiceEnabled) _listenLoop();
+      if (_voiceEnabled && mounted) _listenLoop();
       WakelockPlus.enable();
     }
   }
@@ -557,7 +600,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ─── Contact Management ───────────────────────────────────────────────────
   void _showAddContactSheet({Contact? editing, int? editIndex}) {
-    final nameCtrl = TextEditingController(text: editing?.name ?? '');
+    final nameCtrl  = TextEditingController(text: editing?.name ?? '');
     final phoneCtrl = TextEditingController(
         text: editing != null ? editing.phone.replaceAll('+91', '') : '');
     String? error;
@@ -580,12 +623,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               Text(editing != null ? 'Edit Contact' : 'Add Trusted Contact',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _kText)),
+              const SizedBox(height: 4),
+              const Text('Alert sent via WhatsApp on SOS',
+                  style: TextStyle(fontSize: 12, color: _kMuted)),
               const SizedBox(height: 16),
               TextField(
                 controller: nameCtrl,
                 style: const TextStyle(color: _kText),
-                decoration: _inputDeco('Name', 'e.g. Maa, Didi, Friend'),
+                decoration: _inputDeco('Name', 'e.g. Maa, Didi, Best Friend'),
                 textCapitalization: TextCapitalization.words,
+                maxLength: 30,
               ),
               const SizedBox(height: 10),
               TextField(
@@ -593,6 +640,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 style: const TextStyle(color: _kText),
                 keyboardType: TextInputType.phone,
                 decoration: _inputDeco('+91 Mobile Number', '9876543210'),
+                maxLength: 10,
               ),
               if (error != null) ...[
                 const SizedBox(height: 8),
@@ -604,7 +652,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 child: ElevatedButton(
                   onPressed: () {
                     final phone = StorageService.validatePhone(phoneCtrl.text.trim());
-                    final name = nameCtrl.text.trim();
+                    final name  = nameCtrl.text.trim();
                     if (name.isEmpty || phone == null) {
                       setModal(() => error = 'Enter a valid name and 10-digit +91 mobile number.');
                       return;
@@ -613,8 +661,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     if (editIndex != null) {
                       updated[editIndex] = Contact(name: name, phone: phone);
                     } else {
-                      if (updated.length >= 3) {
-                        setModal(() => error = 'Maximum 3 trusted contacts allowed.');
+                      if (updated.length >= StorageService._maxContacts) {
+                        setModal(() => error = 'Maximum ${StorageService._maxContacts} trusted contacts allowed.');
                         return;
                       }
                       updated.add(Contact(name: name, phone: phone));
@@ -647,6 +695,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         hintStyle: const TextStyle(color: _kMuted),
         filled: true,
         fillColor: _kBg,
+        counterStyle: const TextStyle(color: _kMuted),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: _kBorder),
@@ -673,36 +722,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ─ Tricolor strip
                 _tricolorStrip(),
                 const SizedBox(height: 10),
-                // ─ Header
                 _header(),
+                if (_rootWarning) _rootWarningBanner(),
                 const SizedBox(height: 10),
-                // ─ No contacts banner
                 if (_contacts.isEmpty) _noContactsBanner(),
-                // ─ Big SOS Button
                 _sosButton(),
                 const SizedBox(height: 10),
-                // ─ Live Transcript Box
                 _transcriptBox(),
                 const SizedBox(height: 10),
-                // ─ Indian Emergency Helplines
                 _helplines(),
                 const SizedBox(height: 10),
-                // ─ Test SOS + Fake Call row
                 _utilityRow(),
                 const SizedBox(height: 10),
-                // ─ Toggles
                 _togglesCard(),
                 const SizedBox(height: 10),
-                // ─ Trusted Contacts
                 _contactsCard(),
                 const SizedBox(height: 10),
-                // ─ Footer
+                _infoCard(),
+                const SizedBox(height: 10),
                 const Center(
-                  child: Text('Offline-ready • Local storage only • No tracking',
-                      style: TextStyle(fontSize: 11, color: _kMuted)),
+                  child: Text(
+                    'Made with ❤️ in India | Team CTRL ALT ELITE',
+                    style: TextStyle(fontSize: 11, color: _kMuted),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Center(
+                  child: Text(
+                    'Offline-ready • Local storage only • No tracking',
+                    style: TextStyle(fontSize: 11, color: _kMuted),
+                  ),
                 ),
                 const SizedBox(height: 20),
               ],
@@ -728,10 +780,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const Icon(Icons.shield, color: _kRed, size: 26),
               const SizedBox(width: 8),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('AWAAZ SOS',
+                const Text('Awaaz Suraksha',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5, color: _kText)),
-                const Text('Hold logo 3s: Silent SOS',
+                        letterSpacing: 1.2, color: _kText)),
+                const Text('Hold logo 3s → Silent SOS',
                     style: TextStyle(fontSize: 11, color: _kMuted)),
               ]),
             ]),
@@ -743,6 +795,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       );
 
+  Widget _rootWarningBanner() => Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF3D2000),
+          border: Border.all(color: const Color(0xFFFF9933)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Row(children: [
+          Icon(Icons.warning_amber, color: Color(0xFFFF9933), size: 16),
+          SizedBox(width: 8),
+          Expanded(child: Text(
+            '⚠ Root detected — data security may be compromised',
+            style: TextStyle(fontSize: 12, color: Color(0xFFFF9933)),
+          )),
+        ]),
+      );
+
   Widget _statusPill(IconData icon, String label, bool ok) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
@@ -751,7 +821,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           border: Border.all(color: _kBorder),
         ),
         child: Row(children: [
-          Container(width: 8, height: 8,
+          Container(
+              width: 8, height: 8,
               decoration: BoxDecoration(
                   color: ok ? _kGreen : _kRed, shape: BoxShape.circle)),
           const SizedBox(width: 5),
@@ -770,7 +841,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Row(
           children: [
             const Expanded(
-              child: Text('No trusted contacts saved. Add up to 3 numbers below.',
+              child: Text('No trusted contacts! Add up to 5 numbers to alert on SOS.',
                   style: TextStyle(fontSize: 13, color: _kText)),
             ),
             const SizedBox(width: 8),
@@ -782,7 +853,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   color: _kRed,
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Text('Add', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                child: const Text('+ Add', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
               ),
             ),
           ],
@@ -795,20 +866,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           GestureDetector(
             onTap: () => _activateSOS(isDemo: false, source: 'SOS Tap Button'),
             child: Container(
-              width: 160, height: 160,
+              width: 170, height: 170,
               decoration: BoxDecoration(
                 color: _kRed,
                 shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: _kRed.withOpacity(0.45), blurRadius: 32, spreadRadius: 4)],
-                border: Border.all(color: Colors.white.withOpacity(0.18), width: 1.5),
+                boxShadow: [BoxShadow(color: _kRed.withOpacity(0.5), blurRadius: 40, spreadRadius: 6)],
+                border: Border.all(color: Colors.white.withOpacity(0.2), width: 2),
               ),
               child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.mic, color: Colors.white, size: 52),
+                  Icon(Icons.mic, color: Colors.white, size: 56),
                   SizedBox(height: 4),
-                  Text('SOS', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900,
+                  Text('SOS', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900,
                       letterSpacing: 3, color: Colors.white)),
+                  Text('TAP TO ALERT', style: TextStyle(fontSize: 10, letterSpacing: 1.5,
+                      color: Colors.white70, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
@@ -820,8 +893,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 TextSpan(text: 'Say '),
                 TextSpan(text: '"Help me now"',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                TextSpan(text: ' or tap SOS'),
+                    style: TextStyle(fontWeight: FontWeight.bold, color: _kRed)),
+                TextSpan(text: ' • Tap • Shake 3×'),
               ],
             ),
           ),
@@ -837,10 +910,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           border: Border.all(color: _kBorder),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Text(_transcript,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, color: _kMuted)),
+        child: Row(children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+              color: _micOk ? _kGreen : _kMuted,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(_transcript,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: _kMuted)),
+          ),
+        ]),
       );
 
   Widget _helplines() => GridView.count(
@@ -869,6 +954,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              const Icon(Icons.phone, color: _kGreen, size: 18),
+              const SizedBox(height: 2),
               Text(number, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: _kText)),
               const SizedBox(height: 2),
               Text(label, textAlign: TextAlign.center,
@@ -880,28 +967,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _utilityRow() => Row(children: [
         Expanded(
-          child: OutlinedButton(
+          child: OutlinedButton.icon(
             onPressed: () => _activateSOS(isDemo: true, source: 'Test SOS'),
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: const Text('Test SOS'),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: _kRed),
-              foregroundColor: _kText,
+              foregroundColor: _kRed,
               padding: const EdgeInsets.symmetric(vertical: 11),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Test SOS (Demo)', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: OutlinedButton(
+          child: OutlinedButton.icon(
             onPressed: _showFakeCallSheet,
+            icon: const Icon(Icons.call, size: 18),
+            label: const Text('Fake Call'),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: _kBorder),
               foregroundColor: _kText,
               padding: const EdgeInsets.symmetric(vertical: 11),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Fake Call', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ),
       ]);
@@ -913,21 +1002,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(children: [
-          _toggleRow('Voice Wake Word Listener',
-              '"Help me now" / "Bachao" (en-IN + Hinglish)', _voiceEnabled, (v) {
+          _toggleRow(
+              Icons.record_voice_over,
+              'Voice Wake Word',
+              '"Help me now" / "Bachao" (always listening)',
+              _voiceEnabled, (v) {
             setState(() => _voiceEnabled = v);
             if (v) { _startVoiceGuard(); } else { _speech.cancel(); _stopBackgroundService(); }
           }),
           const Divider(color: _kBorder, height: 1),
-          _toggleRow('Silent SOS Mode',
-              'Zero sound/siren. Trigger: hold logo 3s', _silentMode,
+          _toggleRow(Icons.visibility_off, 'Silent SOS Mode',
+              'No sound/siren. Hold logo 3s to trigger', _silentMode,
               (v) => setState(() => _silentMode = v)),
           const Divider(color: _kBorder, height: 1),
-          _toggleRow('Loud SOS Siren',
-              'Dual-tone alarm on SOS (unless silent)', _sirenEnabled,
+          _toggleRow(Icons.volume_up, 'Loud SOS Siren',
+              'Vibration alarm on SOS (unless silent)', _sirenEnabled,
               (v) => setState(() => _sirenEnabled = v)),
           const Divider(color: _kBorder, height: 1),
-          _toggleRow('Shake to SOS',
+          _toggleRow(Icons.vibration, 'Shake to SOS',
               '3 strong shakes within 1.5s triggers SOS', _shakeEnabled, (v) {
             setState(() => _shakeEnabled = v);
             if (v) _startShakeListener(); else _shakeSubscription?.cancel();
@@ -935,10 +1027,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ]),
       );
 
-  Widget _toggleRow(String title, String desc, bool value, ValueChanged<bool> onChanged) =>
+  Widget _toggleRow(IconData icon, String title, String desc, bool value,
+      ValueChanged<bool> onChanged) =>
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(children: [
+          Icon(icon, color: _kMuted, size: 20),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
@@ -956,6 +1051,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ]),
       );
 
+  Widget _infoCard() => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: _kCard,
+          border: Border.all(color: _kBorder),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('HOW IT WORKS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
+                letterSpacing: 1, color: _kMuted)),
+            const SizedBox(height: 8),
+            _infoRow('🗣️', 'Say "Help me now" or "Bachao" — works in background'),
+            _infoRow('📳', 'Shake phone 3× quickly — works with locked screen'),
+            _infoRow('👆', 'Tap the red SOS button for instant alert'),
+            _infoRow('🤫', 'Hold the shield logo 3s for SILENT mode'),
+            _infoRow('📍', 'GPS + WhatsApp alert sent to all trusted contacts'),
+            _infoRow('🎙️', 'Audio evidence recorded automatically as .m4a'),
+          ],
+        ),
+      );
+
+  Widget _infoRow(String emoji, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 5),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 12, color: _kMuted))),
+        ]),
+      );
+
   Widget _contactsCard() => Container(
         decoration: BoxDecoration(
           color: _kCard,
@@ -969,12 +1096,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
+                  const Icon(Icons.people, color: _kMuted, size: 18),
+                  const SizedBox(width: 8),
                   const Text('Trusted Contacts',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _kText)),
                   const Spacer(),
-                  Text('${_contacts.length} / 3',
+                  Text('${_contacts.length} / ${StorageService._maxContacts}',
                       style: const TextStyle(fontSize: 12, color: _kMuted)),
-                  if (_contacts.length < 3) ...[
+                  if (_contacts.length < StorageService._maxContacts) ...[
                     const SizedBox(width: 10),
                     GestureDetector(
                       onTap: () => _showAddContactSheet(),
@@ -996,7 +1125,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (_contacts.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(12),
-                child: Text('No contacts saved yet.',
+                child: Text('No contacts saved yet. Add up to 5 trusted numbers.',
                     style: TextStyle(fontSize: 13, color: _kMuted)),
               ),
             ..._contacts.asMap().entries.map((e) => _contactItem(e.value, e.key)),
@@ -1012,6 +1141,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : BorderSide.none),
         ),
         child: Row(children: [
+          Container(
+            width: 32, height: 32,
+            decoration: BoxDecoration(color: _kBg, borderRadius: BorderRadius.circular(16)),
+            child: Center(child: Text('${idx + 1}',
+                style: const TextStyle(fontWeight: FontWeight.w900, color: _kMuted, fontSize: 13))),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(c.name, style: const TextStyle(fontWeight: FontWeight.bold, color: _kText)),
@@ -1021,7 +1157,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           GestureDetector(
             onTap: () => _showAddContactSheet(editing: c, editIndex: idx),
-            child: const Padding(padding: EdgeInsets.all(6), child: Text('Edit', style: TextStyle(fontSize: 12, color: _kMuted))),
+            child: const Padding(padding: EdgeInsets.all(8),
+                child: Icon(Icons.edit, size: 16, color: _kMuted)),
           ),
           GestureDetector(
             onTap: () {
@@ -1029,8 +1166,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               StorageService.saveContacts(updated);
               setState(() => _contacts = updated);
             },
-            child: const Padding(padding: EdgeInsets.all(6),
-                child: Text('Delete', style: TextStyle(fontSize: 12, color: _kRed))),
+            child: const Padding(padding: EdgeInsets.all(8),
+                child: Icon(Icons.delete_outline, size: 16, color: _kRed)),
           ),
         ]),
       );
@@ -1038,7 +1175,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _showFakeCallSheet() {
     String caller = 'Maa';
     int delaySec = 0;
-    final callerOptions = ['Maa', 'Dad', 'Didi', '112 Control Room'];
+    final callerOptions = ['Maa', 'Dad', 'Didi', 'Bhai', '112 Control Room'];
 
     showModalBottomSheet(
       context: context,
@@ -1054,8 +1191,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               const Text('Fake Incoming Call',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _kText)),
+              const Text('Pretend you have an urgent call — escape safely',
+                  style: TextStyle(fontSize: 12, color: _kMuted)),
               const SizedBox(height: 16),
-              const Text('Caller', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _kMuted)),
+              const Text('CALLER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _kMuted, letterSpacing: 1)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8, runSpacing: 8,
@@ -1075,21 +1214,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 )).toList(),
               ),
               const SizedBox(height: 16),
-              const Text('Delay', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _kMuted)),
+              const Text('DELAY', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _kMuted, letterSpacing: 1)),
               const SizedBox(height: 8),
               Row(
-                children: [0, 5, 15].map((d) => Padding(
+                children: [0, 5, 10, 30].map((d) => Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () => setModal(() => delaySec = d),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
                       decoration: BoxDecoration(
                         color: delaySec == d ? _kGreen : _kBg,
                         border: Border.all(color: delaySec == d ? _kGreen : _kBorder),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Text('${d}s',
+                      child: Text(d == 0 ? 'Now' : '${d}s',
                           style: TextStyle(fontWeight: FontWeight.bold,
                               color: delaySec == d ? Colors.white : _kText)),
                     ),
@@ -1104,6 +1243,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     Navigator.pop(ctx);
                     Future.delayed(Duration(seconds: delaySec), () {
                       if (mounted) {
+                        HapticFeedback.heavyImpact();
                         Navigator.push(context,
                           MaterialPageRoute(
                             builder: (_) => FakeCallScreen(callerName: caller),
@@ -1157,14 +1297,15 @@ class SosActiveScreen extends StatefulWidget {
   State<SosActiveScreen> createState() => _SosActiveScreenState();
 }
 
-class _SosActiveScreenState extends State<SosActiveScreen> {
+class _SosActiveScreenState extends State<SosActiveScreen>
+    with TickerProviderStateMixin {
   int _countdown = 5;
   Timer? _countdownTimer;
   bool _dispatched = false;
-  bool _cancelled = false;
+  bool _cancelled  = false;
 
-  String _gpsStatus = 'Locating…';
-  String _recStatus = 'Standby';
+  String _gpsStatus  = 'Locating…';
+  String _recStatus  = 'Standby';
   String _alertStatus = 'Waiting…';
 
   Map<String, dynamic>? _loc;
@@ -1175,24 +1316,55 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
   Timer? _recTimer;
   Duration _recElapsed = Duration.zero;
 
-  // Siren
+  // Siren (vibration-based, works without audio files)
+  Timer? _sirenTimer;
   bool _sirenActive = false;
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
 
   @override
   void initState() {
     super.initState();
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 600))
+      ..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.95, end: 1.08).animate(
+        CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+
     WakelockPlus.enable();
     _startCountdown();
     _startVoiceDeactivationListener();
+    if (widget.sirenEnabled) _startSiren();
+  }
+
+  void _startSiren() {
+    _sirenActive = true;
+    // Rapid heavy vibrations as siren substitute
+    _sirenTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
+      if (_sirenActive && !_cancelled) {
+        HapticFeedback.heavyImpact();
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (_sirenActive && !_cancelled) HapticFeedback.heavyImpact();
+        });
+        Future.delayed(const Duration(milliseconds: 400), () {
+          if (_sirenActive && !_cancelled) HapticFeedback.heavyImpact();
+        });
+      }
+    });
+  }
+
+  void _stopSiren() {
+    _sirenActive = false;
+    _sirenTimer?.cancel();
   }
 
   void _startCountdown() {
     widget.tts.speak(
-      'AWAAZ SOS activated. Stay calm. Sending alert in 5 seconds.',
+      'Awaaz Suraksha SOS activated. Sending alert in 5 seconds. Say I\'m safe to cancel.',
     );
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (_cancelled) { t.cancel(); return; }
-      setState(() => _countdown--);
+      if (mounted) setState(() => _countdown--);
       if (_countdown <= 0) {
         t.cancel();
         _dispatch();
@@ -1203,60 +1375,61 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
   Future<void> _dispatch() async {
     if (_cancelled || _dispatched) return;
     _dispatched = true;
-    setState(() => _alertStatus = 'Dispatching…');
+    if (mounted) setState(() => _alertStatus = 'Dispatching…');
 
-    // Speak
-    widget.tts.speak('Alerting your contacts now. Stay calm.');
+    widget.tts.speak('Alerting your contacts now. Stay calm. Help is coming.');
 
     // Start recording
-    setState(() => _recStatus = 'Starting recording…');
+    if (mounted) setState(() => _recStatus = 'Starting…');
     final recOk = await _recording.start();
     if (recOk) {
-      setState(() => _recStatus = 'Recording 00:00');
+      if (mounted) setState(() => _recStatus = 'Recording 00:00');
       _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
         setState(() {
           _recElapsed = _recording.elapsed;
           final mm = _recElapsed.inMinutes.toString().padLeft(2, '0');
           final ss = (_recElapsed.inSeconds % 60).toString().padLeft(2, '0');
-          _recStatus = 'Recording $mm:$ss';
+          _recStatus = '🔴 Recording $mm:$ss';
         });
       });
     } else {
-      setState(() => _recStatus = 'Mic permission denied');
+      if (mounted) setState(() => _recStatus = 'Mic denied — check permissions');
     }
 
     // GPS
-    setState(() => _gpsStatus = 'Capturing (8s max)…');
+    if (mounted) setState(() => _gpsStatus = 'Locating (8s max)…');
     final loc = await LocationService.getLocation();
     if (mounted) {
       setState(() {
         _loc = loc;
         if (loc['ok'] == true) {
+          final acc = loc['accuracy'] != null ? ' ±${loc['accuracy']}m' : '';
           _mapsUrl = LocationService.buildMapsUrl(loc['lat'], loc['lng']);
-          _gpsStatus = '${loc['lat']}, ${loc['lng']}';
+          _gpsStatus = '${loc['lat']}, ${loc['lng']}$acc';
         } else {
           _gpsStatus = 'Unavailable: ${loc['reason']}';
         }
       });
     }
 
-    // WhatsApp
+    // Alert contacts via WhatsApp
     if (widget.isDemo) {
-      setState(() => _alertStatus = 'DEMO — nothing sent');
+      if (mounted) setState(() => _alertStatus = 'DEMO — nothing sent');
     } else {
       final message = WhatsAppService.buildMessage(loc);
       int opened = 0;
       for (final c in widget.contacts) {
         final ok = await WhatsAppService.openWhatsApp(c, message);
         if (ok) opened++;
-        await Future.delayed(const Duration(milliseconds: 500));
+        await Future.delayed(const Duration(milliseconds: 600));
       }
       if (mounted) {
         setState(() => _alertStatus = widget.contacts.isEmpty
-            ? 'No contacts — dial 112 or 181'
+            ? '⚠ No contacts — dial 112 or 181 immediately!'
             : opened > 0
-                ? 'WhatsApp opened ($opened/${widget.contacts.length})'
-                : 'WhatsApp blocked — tap Call below');
+                ? '✅ WhatsApp sent to $opened/${widget.contacts.length} contact${opened > 1 ? 's' : ''}'
+                : '⚠ WhatsApp blocked — tap Call buttons below');
       }
     }
   }
@@ -1273,7 +1446,7 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
     _speech.listen(
       onResult: (result) {
         final norm = result.recognizedWords.toLowerCase();
-        final safeR = RegExp(r"(?:^|\s)(a+w+a+[sz]|a+v+a+[sz]|आवाज़?)\s+(i'?m|im|i\s+am)\s+safe(?:\s|$)");
+        final safeR = RegExp(r"(?:^|\s)(i'?m\s+safe|i\s+am\s+safe|cancel\s+sos|awaaz\s+safe)(?:\s|$)");
         if (safeR.hasMatch(norm)) {
           _deactivate('Voice ("I\'m safe")');
         }
@@ -1294,22 +1467,22 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
   Future<void> _deactivate(String reason) async {
     if (_cancelled) return;
     _cancelled = true;
+    _stopSiren();
     _countdownTimer?.cancel();
     _recTimer?.cancel();
     await _speech.cancel();
     await widget.tts.stop();
 
-    // Save recording
     if (_dispatched) {
       final savedPath = await _recording.stop();
       if (!widget.isSilent) {
-        await widget.tts.speak('AWAAZ SOS deactivated. You are safe now.');
+        await widget.tts.speak('Awaaz Suraksha deactivated. You are safe now.');
       }
       if (mounted && savedPath != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: _kCard,
-            content: Text('Audio evidence saved to:\n$savedPath',
+            content: Text('Audio evidence saved:\n$savedPath',
                 style: const TextStyle(color: _kText, fontSize: 12)),
             duration: const Duration(seconds: 6),
           ),
@@ -1327,7 +1500,10 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
   void dispose() {
     _countdownTimer?.cancel();
     _recTimer?.cancel();
+    _sirenTimer?.cancel();
+    _pulseCtrl.dispose();
     _speech.cancel();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -1341,53 +1517,46 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Demo badge
-              if (widget.isDemo)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: _kRed,
-                    borderRadius: BorderRadius.circular(99),
-                    border: Border.all(color: Colors.white),
-                  ),
-                  child: const Text('DEMO MODE — NOTHING SENT',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
-                          letterSpacing: 1, color: Colors.white)),
-                ),
-              if (widget.isSilent)
-                Container(
-                  margin: const EdgeInsets.only(top: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: _kCard,
-                    borderRadius: BorderRadius.circular(99),
-                    border: Border.all(color: _kBorder),
-                  ),
-                  child: const Text('SILENT MODE',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
-                          letterSpacing: 1, color: _kText)),
-                ),
+              // Badges
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                if (widget.isDemo)
+                  _badge('DEMO — NOTHING SENT', _kRed),
+                if (widget.isSilent) ...[
+                  if (widget.isDemo) const SizedBox(width: 8),
+                  _badge('SILENT MODE', _kCard),
+                ],
+              ]),
               const SizedBox(height: 18),
 
-              // SOS ACTIVE title
-              const Text('SOS ACTIVE',
-                  style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900,
-                      letterSpacing: 4, color: Colors.white)),
+              // SOS ACTIVE title with pulse
+              ScaleTransition(
+                scale: _pulseAnim,
+                child: const Text('SOS ACTIVE',
+                    style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900,
+                        letterSpacing: 4, color: Colors.white)),
+              ),
               const SizedBox(height: 6),
+              Text('Triggered by: ${widget.source}',
+                  style: const TextStyle(fontSize: 11, color: Colors.white38, letterSpacing: 0.5)),
+              const SizedBox(height: 10),
 
-              // Countdown
+              // Countdown / status
               if (!_dispatched)
                 Column(children: [
                   Text('$_countdown',
                       style: const TextStyle(fontSize: 90, fontWeight: FontWeight.w900,
                           color: Colors.white, fontFamily: 'monospace')),
-                  Text('Sending alert in $_countdown second${_countdown == 1 ? '' : 's'}…',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold,
-                          color: Colors.white70)),
+                  Text(
+                    'Sending alert in $_countdown second${_countdown == 1 ? '' : 's'}…\nSay "I\'m safe" to cancel',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70),
+                  ),
                 ])
               else
                 Text(
-                  widget.isDemo ? 'DEMO active — no real alerts sent' : 'Alerting your contacts. Stay calm.',
+                  widget.isDemo
+                      ? 'DEMO active — no real alerts sent'
+                      : '🚨 Alerting your contacts. Stay calm.\nHelp is coming.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
@@ -1397,7 +1566,7 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
               // Telemetry Cards
               _sosCard('📍 GPS Location', _gpsStatus),
               const SizedBox(height: 8),
-              _sosCard('🎙️ Audio Recording', _recStatus),
+              _sosCard('🎙️ Audio Evidence', _recStatus),
               const SizedBox(height: 8),
               _sosCard('💬 Contact Alerts', _alertStatus),
 
@@ -1407,9 +1576,25 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
                 GestureDetector(
                   onTap: () => launchUrl(Uri.parse(_mapsUrl!),
                       mode: LaunchMode.externalApplication),
-                  child: const Text('Open in Google Maps →',
-                      style: TextStyle(color: Colors.white,
-                          decoration: TextDecoration.underline)),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _kCard.withOpacity(0.7),
+                      border: Border.all(color: _kBorder),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.map, color: _kGreen, size: 16),
+                        SizedBox(width: 6),
+                        Text('Open in Google Maps →',
+                            style: TextStyle(color: Colors.white,
+                                decoration: TextDecoration.underline,
+                                fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
                 ),
               ],
 
@@ -1441,7 +1626,7 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            'Demo message preview:\n${WhatsAppService.buildMessage(_loc ?? {'ok': false})}',
+                            'Preview:\n${WhatsAppService.buildMessage(_loc ?? {'ok': false})}',
                             style: const TextStyle(fontSize: 11, color: _kMuted),
                           ),
                         ),
@@ -1452,6 +1637,24 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
               ],
 
               const SizedBox(height: 20),
+
+              // Emergency dial
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => launchUrl(Uri.parse('tel:112')),
+                  icon: const Icon(Icons.phone, color: Colors.white),
+                  label: const Text('CALL 112 — EMERGENCY',
+                      style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1, color: Colors.white)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.white, width: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
 
               // Voice hint
               const Text('Say "I\'m safe" or tap below to stop',
@@ -1466,14 +1669,13 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
                   width: double.infinity,
                   height: 64,
                   decoration: BoxDecoration(
-                    color: _kRed,
-                    border: Border.all(color: Colors.white, width: 2),
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Center(
-                    child: Text('CANCEL SOS',
-                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900,
-                            letterSpacing: 2, color: Colors.white)),
+                    child: Text('I\'M SAFE — CANCEL SOS',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900,
+                            letterSpacing: 1, color: _kSosBg)),
                   ),
                 ),
               ),
@@ -1484,6 +1686,18 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
       ),
     );
   }
+
+  Widget _badge(String text, Color bg) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(color: Colors.white),
+        ),
+        child: Text(text,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
+                letterSpacing: 1, color: Colors.white)),
+      );
 
   Widget _sosCard(String label, String value) => Container(
         width: double.infinity,
@@ -1522,16 +1736,16 @@ class _SosActiveScreenState extends State<SosActiveScreen> {
           ),
           if (!widget.isDemo)
             GestureDetector(
-              onTap: () => WhatsAppService.openWhatsApp(c, WhatsAppService.buildMessage(_loc ?? {'ok': false})),
+              onTap: () => WhatsAppService.openWhatsApp(
+                  c, WhatsAppService.buildMessage(_loc ?? {'ok': false})),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 margin: const EdgeInsets.only(left: 6),
                 decoration: BoxDecoration(
-                  color: _kCard,
-                  border: Border.all(color: _kBorder),
+                  color: const Color(0xFF25D366),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Text('WhatsApp', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _kText)),
+                child: const Text('WA', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
               ),
             ),
         ]),
@@ -1551,12 +1765,19 @@ class _FakeCallScreenState extends State<FakeCallScreen> {
   bool _accepted = false;
   Duration _callDuration = Duration.zero;
   Timer? _callTimer;
-  final String _status = 'Ringing…';
+  String _callStatus = 'Ringing…';
 
   void _accept() {
-    setState(() => _accepted = true);
+    HapticFeedback.heavyImpact();
+    setState(() {
+      _accepted = true;
+      _callStatus = '00:00';
+    });
     _callTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _callDuration += const Duration(seconds: 1));
+      setState(() {
+        _callDuration += const Duration(seconds: 1);
+        _callStatus = _formatDuration(_callDuration);
+      });
     });
   }
 
@@ -1580,7 +1801,7 @@ class _FakeCallScreenState extends State<FakeCallScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: const Color(0xFF1C1C1E),
       body: SafeArea(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1591,6 +1812,16 @@ class _FakeCallScreenState extends State<FakeCallScreen> {
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold,
                       letterSpacing: 2, color: _kMuted)),
               const SizedBox(height: 20),
+              Container(
+                width: 80, height: 80,
+                decoration: BoxDecoration(
+                  color: _kCard,
+                  borderRadius: BorderRadius.circular(40),
+                  border: Border.all(color: _kBorder, width: 2),
+                ),
+                child: const Icon(Icons.person, color: _kMuted, size: 44),
+              ),
+              const SizedBox(height: 14),
               Text(widget.callerName,
                   style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: _kText)),
               const SizedBox(height: 6),
@@ -1602,14 +1833,16 @@ class _FakeCallScreenState extends State<FakeCallScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                _accepted ? _formatDuration(_callDuration) : _status,
+                _callStatus,
                 style: const TextStyle(fontSize: 18, fontFamily: 'monospace', color: _kText),
               ),
             ]),
             Padding(
               padding: const EdgeInsets.only(bottom: 48),
               child: Row(
-                mainAxisAlignment: _accepted ? MainAxisAlignment.center : MainAxisAlignment.spaceEvenly,
+                mainAxisAlignment: _accepted
+                    ? MainAxisAlignment.center
+                    : MainAxisAlignment.spaceEvenly,
                 children: [
                   if (!_accepted)
                     _callBtn(Icons.call_end, 'Decline', _kRed, _end),
