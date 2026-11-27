@@ -524,6 +524,8 @@ class StorageService {
   static Future<void> wipeAll() async {
     final p = await SharedPreferences.getInstance();
     await p.clear();
+    await p.setBool('shake_enabled', false);
+    await FlutterForegroundTask.stopService();
     try {
       final dir = await getApplicationDocumentsDirectory();
       dir.listSync().whereType<File>().where((f) =>
@@ -1734,6 +1736,13 @@ class _ToolsTabState extends State<_ToolsTab> {
   }
 
   Future<void> _arm() async {
+    final locationPermission = await Permission.locationWhenInUse.request();
+    if (!locationPermission.isGranted) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location permission is needed for background check-in alerts.')),
+      );
+      return;
+    }
     final deadline = DateTime.now()
         .add(Duration(minutes: widget.settings.checkinMinutes))
         .millisecondsSinceEpoch;
@@ -1745,7 +1754,21 @@ class _ToolsTabState extends State<_ToolsTab> {
       _armed = true;
     });
     _startDisplayTimer();
-    await widget.onBackgroundMonitorChanged();
+    try {
+      await widget.onBackgroundMonitorChanged();
+    } on Exception catch (error) {
+      await p.remove('checkin_deadline_ms');
+      if (mounted) {
+        setState(() {
+          _armed = false;
+          _remaining = Duration.zero;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start background monitoring: $error')),
+        );
+      }
+      return;
+    }
     await StorageService.addLog('Check-in timer armed');
   }
 
@@ -1837,7 +1860,15 @@ class _ToolsTabState extends State<_ToolsTab> {
     await p.setInt('live_share_until_ms', until.millisecondsSinceEpoch);
     await p.setInt('live_share_interval_ms', widget.settings.liveShareIntervalMinutes * 60000);
     await p.setInt('live_share_last_update_ms', now.millisecondsSinceEpoch);
-    await widget.onBackgroundMonitorChanged();
+    try {
+      await widget.onBackgroundMonitorChanged();
+    } on Exception catch (error) {
+      await p.remove('live_share_until_ms');
+      await p.remove('live_share_interval_ms');
+      await p.remove('live_share_last_update_ms');
+      if (mounted) setState(() => _liveShareStatus = 'Could not start background sharing: $error');
+      return;
+    }
 
     final sent = await AlertService.sendSmsToContacts(
       widget.contacts,
