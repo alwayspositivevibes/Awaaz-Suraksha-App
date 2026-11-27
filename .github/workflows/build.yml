@@ -133,6 +133,10 @@ jobs:
           test -x "$AAPT"
           "$AAPT" dump permissions "$STANDARD_APK" > /tmp/standard-permissions.txt
           "$AAPT" dump permissions "$AUTO_SMS_APK" > /tmp/auto-sms-permissions.txt
+          echo 'Permissions in standard APK:'
+          cat /tmp/standard-permissions.txt
+          echo 'Permissions in Auto-SMS APK:'
+          cat /tmp/auto-sms-permissions.txt
           if grep -Eq 'android\.permission\.(SEND_SMS|ACCESS_BACKGROUND_LOCATION|REQUEST_INSTALL_PACKAGES|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECEIVE_BOOT_COMPLETED)' /tmp/standard-permissions.txt; then
             echo 'The standard APK unexpectedly declares an optional or unused permission.'
             exit 1
