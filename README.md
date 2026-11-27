@@ -22,7 +22,7 @@
 
 ## 📥 Download APK
 
-Go to **[Actions](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/actions)** → Latest successful `Build Awaaz Suraksha APK` → Download `awaaz-suraksha-debug-apk`
+Download the latest APK from **[GitHub Releases](https://github.com/alwayspositivevibes/Awaaz-Suraksha-App/releases)**.
 
 Install on Android: `Settings → Install unknown apps → Allow`
 
