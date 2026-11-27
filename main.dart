@@ -385,8 +385,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     setState(() {
       _micOk = statuses[Permission.microphone]?.isGranted ?? false;
-      _gpsOk = statuses[Permission.location]?.isGranted ?? false ||
-          statuses[Permission.locationWhenInUse]?.isGranted ?? false;
+      _gpsOk = (statuses[Permission.location]?.isGranted ?? false) ||
+          (statuses[Permission.locationWhenInUse]?.isGranted ?? false);
     });
   }
 
@@ -399,11 +399,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         channelDescription: 'AWAAZ SOS is protecting you in the background.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
-        iconData: const NotificationIconData(
-          resType: ResourceType.mipmap,
-          resPrefix: ResourcePrefix.ic,
-          name: 'launcher',
-        ),
       ),
       iosNotificationOptions: const IOSNotificationOptions(
         showNotification: true,
