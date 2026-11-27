@@ -34,8 +34,9 @@ dependencies:
   # Keep Screen On
   wakelock_plus: ^1.2.9
 
-  # Background Foreground Service (keeps mic alive when minimized)
+  # Foreground service for shake detection with the screen locked
   flutter_foreground_task: ^8.11.0
+  flutter_local_notifications: ^18.0.1
 
   # Accelerometer for Shake-to-SOS
   sensors_plus: ^5.0.1

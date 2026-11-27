@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -24,18 +26,38 @@ void startCallback() => FlutterForegroundTask.setTaskHandler(_BgHandler());
 class _BgHandler extends TaskHandler {
   StreamSubscription<AccelerometerEvent>? _shakeSub;
   final List<DateTime> _shakeTimes = [];
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
   double _lastMag = 0;
   double _sensitivity = 20;
+  bool _sosTriggered = false;
+  bool _sirenEnabled = true;
+  bool _silentMode = false;
 
   @override
   Future<void> onStart(DateTime ts, TaskStarter s) async {
     final p = await SharedPreferences.getInstance();
     if (!(p.getBool('shake_enabled') ?? true)) return;
     _sensitivity = p.getDouble('shake_sensitivity') ?? 20;
+    _sosTriggered = p.getBool('pending_background_sos') ?? false;
+    _sirenEnabled = p.getBool('siren_enabled') ?? true;
+    _silentMode = p.getBool('silent_mode') ?? false;
     _shakeSub = accelerometerEventStream().listen(_onAccelerometerEvent);
+    try {
+      await _notifications.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('ic_launcher'),
+        ),
+      );
+    } on MissingPluginException catch (error) {
+      print('Background notification plugin unavailable: $error');
+    } on PlatformException catch (error) {
+      print('Background notification initialization failed: $error');
+    }
   }
 
   void _onAccelerometerEvent(AccelerometerEvent event) {
+    if (_sosTriggered) return;
     final mag = math.sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
     final delta = (mag - _lastMag).abs();
     _lastMag = mag;
@@ -46,8 +68,47 @@ class _BgHandler extends TaskHandler {
     _shakeTimes.add(now);
     if (_shakeTimes.length >= 3) {
       _shakeTimes.clear();
-      FlutterForegroundTask.sendDataToMain({'command': 'shake'});
+      _triggerBackgroundSOS().catchError((Object error) {
+        print('Background SOS notification failed: $error');
+      });
     }
+  }
+
+  Future<void> _triggerBackgroundSOS() async {
+    if (_sosTriggered) return;
+    _sosTriggered = true;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('pending_background_sos', true);
+
+    await FlutterForegroundTask.updateService(
+      notificationTitle: 'SOS triggered',
+      notificationText: 'Shake detected. Open the app to continue the alert.',
+    );
+    FlutterForegroundTask.sendDataToMain({'command': 'shake'});
+
+    final playSound = _sirenEnabled && !_silentMode;
+    final channelId = playSound ? 'awaaz_sos_alert' : 'awaaz_sos_silent';
+    await _notifications.show(
+      1002,
+      'SOS triggered',
+      'Shake detected. Open Awaaz Suraksha to continue the alert.',
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          channelId,
+          playSound ? 'SOS alerts' : 'Silent SOS alerts',
+          channelDescription: 'Alerts triggered by shake detection.',
+          importance: Importance.max,
+          priority: Priority.max,
+          category: AndroidNotificationCategory.alarm,
+          playSound: playSound,
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 700]),
+          audioAttributesUsage: AudioAttributesUsage.alarm,
+          visibility: NotificationVisibility.public,
+        ),
+      ),
+      payload: 'background_sos',
+    );
   }
 
   @override Future<void> onRepeatEvent(DateTime ts) async {}
@@ -384,6 +445,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _serviceRunning = false;
   bool _loading = true;
   bool _sosActive = false;
+  bool _handlingPendingSos = false;
   Timer? _voiceRestartTimer;
 
   final TtsService _tts = TtsService();
@@ -403,7 +465,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _requestPerms();
     if (_settings.voiceEnabled) await _startVoice();
     await _syncShakeService();
-    if (mounted) setState(() { _loading = false; });
+    if (mounted) {
+      setState(() { _loading = false; });
+      await _handlePendingBackgroundSOS();
+    }
   }
 
   Future<void> _requestPerms() async {
@@ -442,12 +507,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onBgData(dynamic data) {
     if (data is Map && data['command'] == 'shake' && mounted) {
-      _triggerSOS(source: 'Shake to SOS (Background)');
+      _handlePendingBackgroundSOS();
+    }
+  }
+
+  Future<void> _handlePendingBackgroundSOS() async {
+    if (_handlingPendingSos || _sosActive || !mounted) return;
+    _handlingPendingSos = true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (!(p.getBool('pending_background_sos') ?? false)) return;
+      await p.remove('pending_background_sos');
+      if (mounted) _triggerSOS(source: 'Shake to SOS');
+    } finally {
+      _handlingPendingSos = false;
     }
   }
 
   Future<void> _startBgService() async {
-    if (await FlutterForegroundTask.isRunningService) return;
+    if (await FlutterForegroundTask.isRunningService) {
+      if (mounted) setState(() => _serviceRunning = true);
+      return;
+    }
     await FlutterForegroundTask.startService(
       serviceId: 1001,
       notificationTitle: '🛡️ Awaaz Suraksha Active',
@@ -558,7 +639,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _sosActive = false;
           _tts.setMuted(false);
           if (_settings.voiceEnabled && mounted) _startVoice();
-          if (mounted) _syncShakeService();
+          if (mounted) _syncShakeService(restart: true);
         },
       ),
       fullscreenDialog: true,
@@ -598,6 +679,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
+      _handlePendingBackgroundSOS();
       if (_settings.voiceEnabled) _startVoice();
       AppSettings.load().then((s) { if (mounted) setState(() => _settings = s); });
       StorageService.loadContacts().then((c) { if (mounted) setState(() => _contacts = c); });

@@ -44,7 +44,8 @@ Every 16 minutes, a woman is harassed in India. Existing SOS apps require manual
 
 ### 📳 Background Shake Detection
 - Shake the phone 3× within 1.5 seconds to trigger SOS, including while the screen is locked
-- Requires the app to remain in Recents; dismissing the app stops background detection
+- Raises an immediate SOS notification; open the app to continue contact alerts
+- Continues after dismissing the app from Recents, but not after Android force-stop or device reboot
 
 ### 🚨 Multi-Trigger SOS
 | Trigger | How |
