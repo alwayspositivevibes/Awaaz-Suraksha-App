@@ -11,7 +11,10 @@ dependencies:
     sdk: flutter
 
   # Offline voice recognition without Android speech-service tones
-  vosk_flutter: ^0.3.48
+  vosk_flutter:
+    git:
+      url: https://github.com/alphacep/vosk-flutter.git
+      ref: e655a96f0ce0dadb5ea8900aa1ba23260c3ec904
 
   # Text to Speech
   flutter_tts: ^4.0.2
@@ -29,7 +32,7 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # Runtime Permissions
-  permission_handler: ^10.4.5
+  permission_handler: ^11.3.1
 
   # Keep Screen On
   wakelock_plus: ^1.2.9
