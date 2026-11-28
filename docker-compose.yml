@@ -1,0 +1,9 @@
+services:
+  app:
+    image: python:3.11-alpine
+    working_dir: /app/web-demo
+    volumes:
+      - .:/app
+    command: python -m http.server 3000
+    ports:
+      - "3000:3000"
