@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#da3633">
+  <meta name="background-color" content="#0d1117">
+  <meta name="description" content="AWAAZ SOS — Voice-first emergency safety Progressive Web App for women in India.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="AWAAZ">
+  <title>AWAAZ SOS</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- 3px Indian Tricolor Accent Strip -->
+    <div class="tricolor-strip" aria-hidden="true">
+      <span class="tricolor-saffron"></span>
+      <span class="tricolor-white"></span>
+      <span class="tricolor-green"></span>
+    </div>
+
+    <!-- Main Single-Screen View -->
+    <div id="main-view" class="main-view">
+      <!-- Flat Header Bar -->
+      <header class="top-bar">
+        <div
+          id="app-icon-trigger"
+          class="brand-area"
+          role="button"
+          tabindex="0"
+          aria-label="AWAAZ SOS — Hold for 3 seconds to trigger Silent SOS"
+          title="Hold 3 seconds for Silent SOS"
+        >
+          <svg class="brand-shield" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+            <path d="M12 2L20 5V12C20 17.2 16.6 20.8 12 22.5C7.4 20.8 4 17.2 4 12V5L12 2Z" fill="#da3633"/>
+            <rect x="10.8" y="7.5" width="2.4" height="5.2" rx="1.2" fill="#e6edf3"/>
+            <path d="M8.8 11.5A3.2 3.2 0 0 0 15.2 11.5" fill="none" stroke="#e6edf3" stroke-width="1.4"/>
+            <rect x="11.4" y="14.7" width="1.2" height="2" fill="#e6edf3"/>
+          </svg>
+          <div class="brand-text">
+            <span class="brand-title">AWAAZ SOS</span>
+            <span id="silent-hold-hint" class="brand-sub">Hold icon 3s: Silent SOS</span>
+          </div>
+        </div>
+
+        <div class="status-pills">
+          <button id="mic-status-pill" type="button" class="status-pill status-bad" aria-label="Microphone status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>Mic</span>
+          </button>
+          <button id="gps-status-pill" type="button" class="status-pill status-bad" aria-label="GPS status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>GPS</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- First-Visit PWA Install Banner -->
+      <aside id="install-banner" class="install-banner hidden" role="region" aria-label="Install AWAAZ SOS">
+        <div class="install-banner-copy">
+          <strong>Install AWAAZ SOS</strong>
+          <span>Add to Android Home Screen for offline fullscreen access.</span>
+          <span id="install-manual-hint" class="install-manual-hint hidden">
+            Open Chrome menu (&#8942;) and tap <strong>Add to Home screen</strong> or <strong>Install app</strong>.
+          </span>
+        </div>
+        <div class="install-banner-actions">
+          <button id="install-confirm-btn" type="button" class="btn btn-danger btn-sm">Install</button>
+          <button id="install-dismiss-btn" type="button" class="btn btn-secondary btn-sm">Later</button>
+        </div>
+      </aside>
+
+      <!-- Contact Setup Reminder (non-blocking) -->
+      <div id="no-contacts-banner" class="notice-banner hidden" role="status">
+        <span>No trusted contacts saved yet. Add up to 3 numbers below for WhatsApp &amp; call alerts.</span>
+        <button id="jump-contacts-btn" type="button" class="btn btn-secondary btn-sm">Add Now</button>
+      </div>
+
+      <!-- Center: 160px Circular SOS Button & Live Transcript -->
+      <section class="sos-center-stage" aria-label="Emergency SOS Trigger">
+        <button id="sos-main-btn" type="button" class="sos-circle-btn" aria-label="Activate SOS Emergency Alert">
+          <svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="11" rx="3"/>
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="8" y1="22" x2="16" y2="22"/>
+          </svg>
+          <span class="sos-circle-label">SOS</span>
+        </button>
+
+        <p class="wake-instruction">Say <strong>&ldquo;Awaaz help me&rdquo;</strong> or tap SOS</p>
+
+        <div class="transcript-box" aria-live="polite">
+          <span id="live-transcript">Heard: Listening in English (India)…</span>
+        </div>
+      </section>
+
+      <!-- Helpline Strip -->
+      <section class="helpline-section" aria-label="Indian Emergency Helplines">
+        <div class="helpline-grid">
+          <a href="tel:112" class="helpline-btn">
+            <span class="helpline-num">112</span>
+            <span class="helpline-name">General Emergency</span>
+          </a>
+          <a href="tel:181" class="helpline-btn">
+            <span class="helpline-num">181</span>
+            <span class="helpline-name">Women Helpline</span>
+          </a>
+          <a href="tel:100" class="helpline-btn">
+            <span class="helpline-num">100</span>
+            <span class="helpline-name">Police</span>
+          </a>
+          <a href="tel:108" class="helpline-btn">
+            <span class="helpline-num">108</span>
+            <span class="helpline-name">Medical / Ambulance</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Quick Action Row: Test SOS (Demo) & Fake Call -->
+      <section class="utility-actions" aria-label="Safety Tools">
+        <button id="test-sos-btn" type="button" class="btn btn-outline-danger">Test SOS (Demo)</button>
+        <button id="fake-call-open-btn" type="button" class="btn btn-secondary">Fake Call</button>
+      </section>
+
+      <!-- Core Toggles -->
+      <section class="card toggles-card" aria-label="Core Protection Toggles">
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <label for="toggle-voice" class="toggle-title">Voice Wake Word Listener</label>
+            <span class="toggle-desc">Detects &ldquo;Awaaz help me&rdquo; &amp; &ldquo;Awaaz I&rsquo;m safe&rdquo; (en-IN)</span>
+          </div>
+          <label class="switch">
+            <input id="toggle-voice" type="checkbox" checked>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <label for="toggle-silent" class="toggle-title">Silent SOS Mode</label>
+            <span class="toggle-desc">Zero sound/siren/speech. Trigger: 3&times; power press or 3s icon hold</span>
+          </div>
+          <label class="switch">
+            <input id="toggle-silent" type="checkbox">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <label for="toggle-siren" class="toggle-title">Loud SOS Siren</label>
+            <span class="toggle-desc">Dual-tone sawtooth siren on activation (unless Silent Mode)</span>
+          </div>
+          <label class="switch">
+            <input id="toggle-siren" type="checkbox" checked>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <label for="toggle-shake" class="toggle-title">Shake to SOS</label>
+            <span class="toggle-desc">3 strong phone shakes within 1.5s triggers SOS</span>
+          </div>
+          <label class="switch">
+            <input id="toggle-shake" type="checkbox" checked>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Collapsible: Trusted Contacts -->
+      <details id="contacts-section" class="card accordion">
+        <summary class="accordion-summary">
+          <span>Trusted Contacts</span>
+          <span id="contacts-count-badge" class="summary-meta">0 / 3 saved</span>
+        </summary>
+        <div class="accordion-body">
+          <div id="contacts-list" class="contacts-list"></div>
+
+          <form id="contact-form" class="contact-form" novalidate>
+            <input id="contact-edit-index" type="hidden" value="-1">
+            <div class="form-row-grid">
+              <div class="field">
+                <label for="contact-name-input">Name</label>
+                <input id="contact-name-input" type="text" maxlength="40" placeholder="e.g. Maa, Didi">
+              </div>
+              <div class="field">
+                <label for="contact-phone-input">Phone (+91)</label>
+                <div class="phone-wrap">
+                  <span class="phone-prefix">+91</span>
+                  <input id="contact-phone-input" type="tel" inputmode="tel" maxlength="15" placeholder="9876543210">
+                </div>
+              </div>
+            </div>
+            <p id="contact-form-error" class="inline-error hidden" role="alert"></p>
+            <div class="form-actions">
+              <button id="contact-save-btn" type="submit" class="btn btn-safe btn-sm">Add Contact</button>
+              <button id="contact-cancel-edit-btn" type="button" class="btn btn-secondary btn-sm hidden">Cancel Edit</button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      <!-- Collapsible: Audio Evidence Vault -->
+      <details id="vault-section" class="card accordion">
+        <summary class="accordion-summary">
+          <span>Audio Evidence Vault</span>
+          <span id="vault-count-badge" class="summary-meta">0 clips</span>
+        </summary>
+        <div class="accordion-body">
+          <div id="vault-list" class="vault-list">
+            <p class="empty-msg">No recorded SOS audio clips yet.</p>
+          </div>
+        </div>
+      </details>
+
+      <!-- Collapsible: Incident Log -->
+      <details id="log-section" class="card accordion">
+        <summary class="accordion-summary">
+          <span>Incident Log</span>
+          <span id="log-count-badge" class="summary-meta">0 events</span>
+        </summary>
+        <div class="accordion-body">
+          <div class="log-toolbar">
+            <span class="muted-small">Stored locally on this device</span>
+            <button id="clear-log-btn" type="button" class="btn btn-secondary btn-xs">Clear Log</button>
+          </div>
+          <ul id="incident-log-list" class="incident-log-list">
+            <li class="empty-msg">No incidents recorded.</li>
+          </ul>
+        </div>
+      </details>
+
+      <!-- Collapsible: Advanced WhatsApp Automation -->
+      <details id="advanced-section" class="card accordion">
+        <summary class="accordion-summary">
+          <span>Advanced (WhatsApp Automation)</span>
+          <span id="advanced-status-badge" class="summary-meta">Default wa.me</span>
+        </summary>
+        <div class="accordion-body">
+          <p class="muted-small">
+            Optional. Leave blank to use default zero-setup <code>wa.me</code> links. If configured, SOS attempts automated dispatch first and silently falls back to <code>wa.me</code> on failure.
+          </p>
+          <form id="advanced-form" class="advanced-form" novalidate>
+            <div class="field">
+              <label for="adv-webhook-url">Webhook URL (POST JSON)</label>
+              <input id="adv-webhook-url" type="url" placeholder="https://your-webhook.example.com/sos">
+            </div>
+            <div class="field">
+              <label for="adv-wa-phone-id">Meta WhatsApp Cloud API — Phone Number ID</label>
+              <input id="adv-wa-phone-id" type="text" placeholder="e.g. 123456789012345">
+            </div>
+            <div class="field">
+              <label for="adv-wa-token">Meta WhatsApp Cloud API — Access Token</label>
+              <input id="adv-wa-token" type="password" autocomplete="off" placeholder="EAAG...">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-safe btn-sm">Save Advanced Settings</button>
+              <button id="adv-clear-btn" type="button" class="btn btn-secondary btn-sm">Reset to Default</button>
+            </div>
+            <p id="adv-save-status" class="inline-success hidden" role="status"></p>
+          </form>
+        </div>
+      </details>
+
+      <footer class="main-footer">
+        <span>Offline-ready PWA &bull; Local storage only &bull; No tracking</span>
+      </footer>
+    </div>
+
+    <!-- SOS Active Fullscreen Takeover -->
+    <section id="sos-view" class="sos-view hidden" role="alertdialog" aria-modal="true" aria-labelledby="sos-active-heading">
+      <div class="sos-top-badges">
+        <span id="sos-silent-badge" class="corner-badge hidden">SILENT MODE</span>
+        <span id="sos-demo-badge" class="corner-badge demo-badge hidden">DEMO MODE</span>
+      </div>
+
+      <header class="sos-header">
+        <h1 id="sos-active-heading" class="sos-active-title">SOS ACTIVE</h1>
+        <p id="sos-phase-text" class="sos-phase-text">Sending alert in 5 seconds…</p>
+      </header>
+
+      <div class="sos-body">
+        <!-- 5 Second Countdown Box -->
+        <div id="countdown-box" class="countdown-box">
+          <div id="countdown-number" class="countdown-number">5</div>
+          <div class="countdown-sub">Tap CANCEL SOS to abort before alert sends</div>
+        </div>
+
+        <!-- Live GPS Telemetry -->
+        <div class="sos-card">
+          <div class="sos-card-head">
+            <span class="sos-card-label">LIVE GPS TELEMETRY</span>
+            <span id="sos-gps-badge" class="sos-pill">Standby</span>
+          </div>
+          <div id="sos-coords" class="mono-coords">Waiting for GPS fix…</div>
+          <div id="sos-address" class="sos-address">Resolving street address…</div>
+          <a id="sos-maps-link" class="sos-maps-link hidden" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
+        </div>
+
+        <!-- Audio & Alert Status -->
+        <div class="sos-status-grid">
+          <div class="sos-card compact-card">
+            <span class="sos-card-label">AUDIO RECORDING</span>
+            <span id="sos-rec-status" class="sos-status-val">Standby</span>
+          </div>
+          <div class="sos-card compact-card">
+            <span class="sos-card-label">CONTACT ALERTS</span>
+            <span id="sos-wa-status" class="sos-status-val">Standby</span>
+          </div>
+        </div>
+
+        <!-- Direct tel: Call Buttons & WhatsApp Fallback -->
+        <div id="sos-contacts-panel" class="sos-card hidden">
+          <div class="sos-card-head">
+            <span class="sos-card-label">TRUSTED CONTACTS — DIRECT CALL / WHATSAPP</span>
+          </div>
+          <p id="sos-fallback-note" class="sos-fallback-note"></p>
+          <div id="sos-contacts-actions" class="sos-contacts-actions"></div>
+          <pre id="sos-demo-preview" class="sos-demo-preview hidden"></pre>
+        </div>
+      </div>
+
+      <footer class="sos-footer">
+        <p class="sos-safe-hint">Say &ldquo;Awaaz I&rsquo;m safe&rdquo; or tap below to stop</p>
+        <button id="cancel-sos-btn" type="button" class="btn-cancel-sos">CANCEL SOS</button>
+      </footer>
+    </section>
+
+    <!-- Fake Incoming Call Selector Modal -->
+    <div id="fake-call-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="fake-call-modal-title">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="fake-call-modal-title">Fake Incoming Call</h2>
+          <button id="fake-call-close-btn" type="button" class="btn btn-secondary btn-xs">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <span class="field-label">Caller</span>
+            <div class="choice-grid" id="fake-caller-choices">
+              <button type="button" class="choice-btn selected" data-caller="Maa">Maa</button>
+              <button type="button" class="choice-btn" data-caller="Dad">Dad</button>
+              <button type="button" class="choice-btn" data-caller="Didi">Didi</button>
+              <button type="button" class="choice-btn" data-caller="112 Control Room">112 Control Room</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">Delay</span>
+            <div class="choice-grid three-col" id="fake-delay-choices">
+              <button type="button" class="choice-btn selected" data-delay="0">0s</button>
+              <button type="button" class="choice-btn" data-delay="5">5s</button>
+              <button type="button" class="choice-btn" data-delay="15">15s</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="fake-call-start-btn" type="button" class="btn btn-safe btn-block">Trigger Fake Call</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fullscreen Fake Incoming Call Screen -->
+    <section id="fake-call-screen" class="fake-call-screen hidden" role="dialog" aria-modal="true" aria-label="Incoming Call">
+      <div class="fake-call-top">
+        <span class="fake-call-tag">INCOMING VOICE CALL</span>
+        <h2 id="fake-call-name" class="fake-call-name">Maa</h2>
+        <p id="fake-call-sub" class="fake-call-sub">Mobile &bull; India</p>
+        <p id="fake-call-timer" class="fake-call-timer">Ringing…</p>
+      </div>
+
+      <div id="fake-call-ring-actions" class="fake-call-actions">
+        <button id="fake-call-decline-btn" type="button" class="call-circle-btn call-decline">
+          <span>Decline</span>
+        </button>
+        <button id="fake-call-accept-btn" type="button" class="call-circle-btn call-accept">
+          <span>Accept</span>
+        </button>
+      </div>
+
+      <div id="fake-call-active-actions" class="fake-call-actions single-action hidden">
+        <button id="fake-call-end-btn" type="button" class="call-circle-btn call-decline">
+          <span>End Call</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Full-Screen Mic Permission Denied Overlay -->
+    <section id="mic-denied-overlay" class="mic-denied-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="mic-denied-title">
+      <div class="mic-denied-card">
+        <h2 id="mic-denied-title">Microphone Permission Required</h2>
+        <p>AWAAZ SOS cannot hear the wake phrase &ldquo;Awaaz help me&rdquo; or record emergency audio until microphone access is allowed.</p>
+        <ol class="mic-steps">
+          <li>Tap the <strong>Lock / Site Settings</strong> icon in the Chrome address bar.</li>
+          <li>Open <strong>Permissions &rarr; Microphone</strong> and select <strong>Allow</strong>.</li>
+          <li>Tap <strong>Retry Microphone</strong> below (or reload the page).</li>
+        </ol>
+        <div class="mic-denied-actions">
+          <button id="mic-retry-overlay-btn" type="button" class="btn btn-danger btn-block">Retry Microphone</button>
+          <button id="mic-continue-without-btn" type="button" class="btn btn-secondary btn-block">Continue Using Tap SOS &amp; Helplines</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch((err) => {
+          console.warn('Service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
